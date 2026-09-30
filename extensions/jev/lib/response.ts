@@ -41,12 +41,23 @@ export function validateResponse(response: unknown, questions: Questions): asser
     }
     const sum = keys.reduce((acc, k) => acc + (probs[k] as number), 0);
     if (Math.abs(sum - 1) > 0.025) throw new ContractError(`Distribution does not sum to one: ${id} (${sum})`);
-    if (q.type === "choice" && (typeof answer.choice !== "string" || !keys.includes(answer.choice))) {
-      throw new ContractError(`Undeclared choice returned: ${id}`);
+    if (q.type === "choice") {
+      const choice = answer.choice;
+      if (typeof choice !== "string" || !keys.includes(choice)) {
+        throw new ContractError(`Undeclared choice returned: ${id}`);
+      }
+      if (keys.some((k) => (probs[k] as number) > (probs[choice] as number))) {
+        throw new ContractError(`Choice must have maximum probability: ${id}`);
+      }
     }
     if (q.type === "score") {
       if (!isNonnegative(answer.score) || answer.score > keys.length - 1) {
         throw new ContractError(`Score out of range: ${id}`);
+      }
+      // Normalize the permitted rounded probability sum; allow two-decimal score rounding.
+      const weighted = keys.reduce((acc, k, i) => acc + i * (probs[k] as number), 0) / sum;
+      if (Math.abs(answer.score - weighted) > 0.005 + 1e-9) {
+        throw new ContractError(`Score must match the probability-weighted position: ${id}`);
       }
       const legend = answer.legend;
       if (!isObject(legend) || Object.keys(legend).length !== keys.length ||

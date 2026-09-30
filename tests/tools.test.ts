@@ -119,3 +119,30 @@ test("ask_jev file cap, token overflow and split guidance are retained", async (
   const groups = suggestSplit([{ name: "a", tokens: 30, kind: "file" }, { name: "b", tokens: 25, kind: "file" }, { name: "c", tokens: 20, kind: "file" }], 50);
   expect(groups.map((g) => g.map((p) => p.name))).toEqual([["a", "c"], ["b"]]);
 });
+
+test("batch and general discovery keep bracketed files and canonicalize aliases", async () => {
+  const dir = await make({ "[id].ts": "route", "a.ts": "source" });
+  const paths = ["*.ts", "[id].ts", "a.ts", "./a.ts", join(dir, "a.ts")];
+  let calls = 0;
+  const decide: Decide = async (s, q) => { calls++; return fakeDecide(s, q); };
+  const batch = await askFiles(paths, Q_JSON, dir, decide);
+  expect(batch.results.map((r) => r.path).sort()).toEqual(["[id].ts", "a.ts"]);
+  expect(batch.skipped).toEqual([]);
+  expect(calls).toBe(2);
+  const general = await askJev({ paths, questions_json: Q_JSON }, dir, decide);
+  expect(general.state_summary.files.sort()).toEqual(["[id].ts", "a.ts"]);
+  expect(calls).toBe(3);
+});
+
+test("rejected NUL binaries do not consume batch or general file slots", async () => {
+  const files: Record<string, string | Buffer> = Object.fromEntries(Array.from({ length: 255 }, (_, i) => [`a${i}.dat`, Buffer.from([1, 0, 2])]));
+  files["z.txt"] = "valid text";
+  const dir = await make(files);
+  const batch = await askFiles(["*"], Q_JSON, dir, fakeDecide);
+  expect(batch.calls).toBe(1);
+  expect(batch.results[0].path).toBe("z.txt");
+  expect(batch.skipped.length).toBe(255);
+  expect(batch.skipped.every((s) => s.reason.includes("binary"))).toBe(true);
+  const general = await askJev({ paths: ["*"], questions_json: Q_JSON }, dir, fakeDecide);
+  expect(general.state_summary.files).toEqual(["z.txt"]);
+});

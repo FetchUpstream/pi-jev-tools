@@ -9,7 +9,7 @@ afterEach(async () => { await Promise.all(dirs.splice(0).map((dir) => rm(dir, { 
 
 test("glob discovery, directories, recursion, deduplication and sorting", async () => {
   const dir = await make({ "src/a.ts": "a", "src/nested/b.ts": "b", "src/c.js": "c" });
-  expect(await expandPatterns(["src/**/*.ts", "src/a.ts"], dir, false)).toEqual(["src/a.ts", "src/nested/b.ts"]);
+  expect((await expandPatterns(["src/**/*.ts", "src/a.ts"], dir, false)).paths).toEqual(["src/a.ts", "src/nested/b.ts"]);
   const direct = await pruneFiles(await expandPatterns(["src"], dir, false), dir);
   expect(direct.files).toEqual(["src/a.ts", "src/c.js"]);
   const recursive = await pruneFiles(await expandPatterns(["src"], dir, true), dir);
@@ -29,15 +29,15 @@ test("generated folders, VCS/dependencies, binary/lock/empty/oversized/invalid f
   for (const skip of SKIP_DIRS) files[`${skip}/x.ts`] = "x";
   const dir = await make(files);
   const r = await pruneFiles([...Object.keys(files), "missing.ts", "../outside.ts"], dir);
-  expect(r.files).toEqual(["src/ok.ts", "nul.dat"]);
-  expect(r.skipped.length).toBe(Object.keys(files).length);
+  expect(r.files).toEqual(["src/ok.ts"]);
+  expect(r.skipped.length).toBe(Object.keys(files).length + 1);
   await expect(readFileState("nul.dat", dir)).rejects.toThrow("binary");
   await expect(readFileState("large.txt", dir)).rejects.toThrow("too large");
   await expect(readFileState("src", dir)).rejects.toThrow("not a file");
   await expect(readFileState("missing.ts", dir)).rejects.toThrow("not found");
   await expect(readFileState("../outside.ts", dir)).rejects.toThrow("outside");
   const broad = await expandPatterns(["**/*.ts"], dir, true);
-  expect(broad).toEqual(["empty.ts", "src/ok.ts"]);
+  expect(broad.paths).toEqual(["empty.ts", "src/ok.ts"]);
 });
 test("cap retained; legitimate dot-dot-prefixed filenames allowed", async () => {
   const dir = await make({ "..safe.ts": "a", "b.ts": "b" });
@@ -64,4 +64,12 @@ test("parallel is ordered and bounded; invalid concurrency fails", async () => {
   expect(result).toEqual(Array.from({ length: 30 }, (_, i) => i * 2));
   expect(peak).toBe(4);
   await expect(parallel([1], 0, async (i) => i)).rejects.toThrow("positive integer");
+});
+
+test("realpath aliases share a cap slot and a stable display path", async () => {
+  const dir = await make({ "a.ts": "a", "b.ts": "b" });
+  await symlink(join(dir, "a.ts"), join(dir, "alias.ts"));
+  const result = await pruneFiles(["a.ts", "./a.ts", join(dir, "a.ts"), "alias.ts", "b.ts"], dir, 2);
+  expect(result.files).toEqual(["a.ts", "b.ts"]);
+  expect(result.skipped).toEqual([]);
 });

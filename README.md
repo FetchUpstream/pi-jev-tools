@@ -173,7 +173,9 @@ splitting or narrowing inputs; content is not silently truncated.
 
 Globs use Node's `fs.promises.glob`; directories are nonrecursive for
 `ask_jev_files` unless `recursive: true`, and recursive for `ask_jev`.
-Files are deduplicated and sorted. Unmatched patterns are reported in `skipped`.
+Files are deduplicated by resolved real path, with workspace-relative display paths.
+Existing bracketed filenames (such as `[id].ts`) are retained. Unmatched patterns
+are reported separately in `skipped`; binary detection happens before file-cap allocation.
 A failed file does not discard the other results. If all attempted judgments
 fail, Pi receives an error result with the structured skipped reasons retained.
 `calls` counts successful file judgments (upstream semantics); `attempts` also
@@ -219,6 +221,10 @@ estimate**. Failed requests may still incur provider charges not reported here.
   not a sandbox against concurrent hostile filesystem changes.
 - `command` does **not** invoke a shell. Only `git status`, `git diff`, `git log`,
   `git show` and `git ls-files` with restricted flags run via `execFile`.
+  Reads are scoped to the session working directory, not the repository root.
+  Revision operands support only `HEAD` and its `~`/`^` ancestors; put file paths
+  after `--`. Git object forms such as `revision:path` are refused. An implicit
+  `-- .` prevents unrestricted repository-wide reads from a nested workspace.
   No scripts, tests/builds, installs, writes, network Git operations, arbitrary
   executables, shell expansion, escapes, pipes, redirects or chained commands.
   Absolute/parent-traversing operands and unsupported flags are refused.

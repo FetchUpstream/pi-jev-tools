@@ -125,4 +125,24 @@ describe("response contracts", () => {
       expect(() => validateResponse(r, qs)).toThrow(ContractError);
     }
   });
+  test("contradictory choices fail, including through the provider client; ties pass", async () => {
+    const r = response(qs);
+    r.answers.choice = { type: "choice", choice: "a", confidence: 1, probabilities: { a: 0, other: 1 } };
+    expect(() => validateResponse(r, qs)).toThrow("maximum probability");
+    await expect(client(async () => Response.json(r)).systemOne("x", qs)).rejects.toThrow("maximum probability");
+    r.answers.choice.probabilities = { a: 0.5, other: 0.5 };
+    expect(() => validateResponse(r, qs)).not.toThrow();
+    r.answers.choice.choice = "other";
+    expect(() => validateResponse(r, qs)).not.toThrow();
+  });
+  test("scores agree with normalized weighted probabilities, allowing two-decimal rounding", () => {
+    const r = response(qs);
+    r.answers.score = { type: "score", score: 0, confidence: 1, probabilities: { "0": 0, "1": 1 }, legend: { "0": "isolated", "1": "sensitive" } };
+    expect(() => validateResponse(r, qs)).toThrow("probability-weighted");
+    r.answers.score.probabilities = { "0": 0.666, "1": 0.333 };
+    r.answers.score.score = 0.33;
+    expect(() => validateResponse(r, qs)).not.toThrow();
+    r.answers.score.score = 0.35;
+    expect(() => validateResponse(r, qs)).toThrow("probability-weighted");
+  });
 });

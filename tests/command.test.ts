@@ -59,3 +59,23 @@ test("real git output stays internal; external diff and fsmonitor are disabled",
   expect(JSON.stringify(r)).not.toContain("const a");
   for (const command of ["git log --oneline -n1", "git show --stat HEAD", "git ls-files"]) expect((await runSafeCommand(command, dir, safe)).exit_code).toBe(0);
 });
+
+test("nested workspaces reject Git object operands and scope implicit reads to cwd", async () => {
+  const dir = await fixture({ "app/inside.txt": "INSIDE_MARKER", "outside.txt": "OUTSIDE_MARKER" }); dirs.push(dir);
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"], { cwd: dir });
+  const cwd = join(dir, "app");
+  for (const command of ["git show HEAD:outside.txt", "git show HEAD:../outside.txt", "git show HEAD^{tree}", "git diff HEAD:outside.txt HEAD:app/inside.txt", "git show :/fixture", "git show -- :../outside.txt"]) {
+    await expect(runSafeCommand(command, cwd, async () => { throw new Error("must not call gate"); })).rejects.toThrow("command refused");
+  }
+  await writeFile(join(dir, "outside.txt"), "OUTSIDE_CHANGED");
+  await writeFile(join(cwd, "inside.txt"), "INSIDE_CHANGED");
+  for (const command of ["git show HEAD", "git show --stat HEAD", "git log -n1", "git diff", "git diff HEAD -- inside.txt", "git status --short", "git ls-files"]) {
+    const result = await runSafeCommand(command, cwd, safe);
+    expect(result.exit_code).toBe(0);
+    expect(result.stdout).not.toContain("OUTSIDE");
+    expect(result.stdout).not.toContain("outside.txt");
+    if (!command.startsWith("git log")) expect(result.stdout).toContain("inside.txt");
+  }
+});

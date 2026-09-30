@@ -1,5 +1,5 @@
 // File discovery, filtering and budgets adapted from Ten Levels of Jev (MIT).
-import { glob, readFile, realpath, stat } from "node:fs/promises";
+import { glob, open, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { LIMITS } from "./types.ts";
 
@@ -44,41 +44,59 @@ export async function readFileState(path: string, cwd: string) {
   return { path, content: buf.toString("utf8") };
 }
 
-export async function expandPatterns(patterns: string[], cwd: string, recursive: boolean): Promise<string[]> {
+export interface Discovery { paths: string[]; skipped: Skipped[] }
+
+export async function expandPatterns(patterns: string[], cwd: string, recursive: boolean): Promise<Discovery> {
   const out = new Set<string>();
+  const skipped: Skipped[] = [];
   // Prune known junk during traversal, not only after enumerating a dependency tree.
   const exclude = (path: string) => pathReason(resolve(cwd, path), resolve(cwd)) !== undefined;
   for (const raw of patterns) {
     const pattern = raw.trim();
     if (!pattern) continue;
-    if (/[*?[\]{}]/.test(pattern)) {
+    let info;
+    try { info = await stat(resolve(cwd, pattern)); } catch { /* May be a glob. */ }
+    // An existing literal path wins, including filenames such as [id].ts.
+    if (!info && /[*?[\]{}]/.test(pattern)) {
       let found = false;
       for await (const path of glob(pattern, { cwd, exclude })) { out.add(String(path)); found = true; }
-      if (!found) out.add(pattern); // prune reports empty patterns instead of silently succeeding
+      if (!found) skipped.push({ path: pattern, reason: `no files matched: ${pattern}` });
       continue;
     }
-    let info;
-    try { info = await stat(resolve(cwd, pattern)); } catch { out.add(pattern); continue; }
-    if (!info.isDirectory() || exclude(pattern)) { out.add(pattern); continue; }
+    if (!info?.isDirectory() || exclude(pattern)) { out.add(pattern); continue; }
     let found = false;
     const base = pattern.replace(/\/+$/, "");
     for await (const path of glob(`${base}/${recursive ? "**/*" : "*"}`, { cwd, exclude })) {
       out.add(String(path)); found = true;
     }
-    if (!found) out.add(pattern);
+    if (!found) skipped.push({ path: pattern, reason: `no files matched: ${pattern}` });
   }
-  return [...out].sort();
+  return { paths: [...out].sort(), skipped };
 }
 
-export async function pruneFiles(paths: string[], cwd: string, cap: number = LIMITS.MAX_CHOICE_OPTIONS) {
+async function checkBinary(path: string, actual: string) {
+  const handle = await open(actual, "r");
+  try {
+    const header = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (header.subarray(0, bytesRead).includes(0)) throw new FileStateError(`binary: ${path}`, path);
+  } finally { await handle.close(); }
+}
+
+export async function pruneFiles(input: string[] | Discovery, cwd: string, cap: number = LIMITS.MAX_CHOICE_OPTIONS) {
   const files: string[] = [];
-  const skipped: Skipped[] = [];
+  const paths = Array.isArray(input) ? input : input.paths;
+  const skipped: Skipped[] = Array.isArray(input) ? [] : [...input.skipped];
+  const seen = new Set<string>();
+  const root = await realpath(cwd);
   for (const path of paths) {
     try {
-      if (/[*?[\]{}]/.test(path)) throw new FileStateError(`no files matched: ${path}`, path);
-      await inspect(path, cwd);
+      const actual = await inspect(path, cwd);
+      if (seen.has(actual)) continue;
+      seen.add(actual);
+      await checkBinary(path, actual);
       if (files.length >= cap) throw new FileStateError(`over the ${cap} file cap; narrow the pattern`, path);
-      files.push(path);
+      files.push(relative(root, actual));
     } catch (error) {
       skipped.push({ path, reason: error instanceof Error ? error.message : "file unavailable" });
     }
