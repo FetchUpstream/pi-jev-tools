@@ -119,8 +119,14 @@ describe("response contracts", () => {
       expect(() => validateResponse(r, qs)).toThrow(ContractError);
     }
   });
-  test("score range, levels and legend are enforced", () => {
-    for (const patch of [{ score: -1 }, { score: 2 }, { legend: { "0": "wrong", "1": "sensitive" } }, { probabilities: { "0": 1 } }]) {
+  test("score wire ranges, level keys and field shapes are enforced", () => {
+    for (const patch of [
+      { score: -1 }, { score: 2 }, { score: NaN }, { score: "0.5" }, { score: undefined },
+      { confidence: -1 }, { confidence: Infinity }, { legend: undefined },
+      { legend: { "0": "isolated" } }, { legend: { "0": 42, "1": "sensitive" } },
+      { probabilities: { "0": 1 } }, { probabilities: { "0": -0.1, "1": 1.1 } },
+      { probabilities: { "0": 0, "1": 0 } }, { probabilities: { "0": 0.4, "1": 0.4 } },
+    ]) {
       const r = response(qs); r.answers.score = { ...r.answers.score, ...patch } as typeof r.answers.score;
       expect(() => validateResponse(r, qs)).toThrow(ContractError);
     }
@@ -135,14 +141,43 @@ describe("response contracts", () => {
     r.answers.choice.choice = "other";
     expect(() => validateResponse(r, qs)).not.toThrow();
   });
-  test("scores agree with normalized weighted probabilities, allowing two-decimal rounding", () => {
+  test("live jev-1.13.0 rounded score mismatches retain valid distributions", async () => {
+    // Captured from public repository inputs; no request content or credentials retained.
+    // Both failed the former 0.005 equality tolerance (independently rounded fields).
+    const criteria = ["simple declarations or low-risk plumbing", "moderate validation or transformation logic", "complex IO, concurrency, security boundary, or likely bug"];
+    const questions: Questions = { risk: { type: "score", instructions: "Rank review priority", criteria } };
+    for (const [score, confidence, probabilities, weighted] of [
+      [0.09, 0.87, { "0": 0.94, "1": 0.04, "2": 0.02 }, 0.08],
+      [0.61, 0.22, { "0": 0.45, "1": 0.48, "2": 0.07 }, 0.62],
+    ] as const) {
+      const raw = { model: "jev-1.13.0", answers: { risk: { type: "score", score, confidence, probabilities, legend: Object.fromEntries(criteria.map((level, i) => [String(i), level])) } }, usage: { input_tokens: 20, output_tokens: 5 } };
+      validateResponse(raw, questions);
+      const result = await client(async () => Response.json(raw)).systemOne("x", questions);
+      expect(result.answers.risk).toHaveProperty("score", weighted);
+      expect(result.answers.risk).toHaveProperty("confidence", confidence);
+      expect(result.answers.risk).toHaveProperty("probabilities", probabilities);
+    }
+  });
+  test("canonical score stays within rubric bounds despite floating-point overshoot", async () => {
+    const criteria = Array.from({ length: 10 }, (_, i) => `Level ${i}`);
+    const questions: Questions = { risk: { type: "score", instructions: "Position?", criteria } };
+    const probabilities = Object.fromEntries(criteria.map((_, i) => [String(i), i === 9 ? 0.992 : 0]));
+    expect(9 * 0.992 / 0.992).toBeGreaterThan(9); // Deterministic reproduction.
+    const raw = { model: "fixture", answers: { risk: { type: "score", score: 9, confidence: 1, probabilities, legend: Object.fromEntries(criteria.map((level, i) => [String(i), level])) } }, usage: { input_tokens: 1, output_tokens: 1 } };
+    const result = await client(async () => Response.json(raw)).systemOne("x", questions);
+    expect(result.answers.risk).toHaveProperty("score", 9);
+  });
+  test("scores and legends are canonicalized without mutating the provider response", async () => {
     const r = response(qs);
-    r.answers.score = { type: "score", score: 0, confidence: 1, probabilities: { "0": 0, "1": 1 }, legend: { "0": "isolated", "1": "sensitive" } };
-    expect(() => validateResponse(r, qs)).toThrow("probability-weighted");
-    r.answers.score.probabilities = { "0": 0.666, "1": 0.333 };
-    r.answers.score.score = 0.33;
-    expect(() => validateResponse(r, qs)).not.toThrow();
-    r.answers.score.score = 0.35;
-    expect(() => validateResponse(r, qs)).toThrow("probability-weighted");
+    r.answers.score = { type: "score", score: 0.35, confidence: 0.61, probabilities: { "0": 0.666, "1": 0.333 }, legend: { "0": "provider wording", "1": "sensitive" } };
+    const snapshot = JSON.stringify(r);
+    validateResponse(r, qs);
+    const result = await client(async () => Response.json(r)).systemOne("x", qs);
+    expect(result.answers.score).toEqual({ type: "score", score: 1 / 3, confidence: 0.61, probabilities: r.answers.score.probabilities, legend: { "0": "isolated", "1": "sensitive" } });
+    expect(JSON.stringify(r)).toBe(snapshot);
+    r.answers.score.score = 0;
+    r.answers.score.probabilities = { "0": 0, "1": 1 };
+    validateResponse(r, qs);
+    expect(compactResponse(r, qs).answers.score).toHaveProperty("score", 1);
   });
 });

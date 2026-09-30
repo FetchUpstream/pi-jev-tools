@@ -33,21 +33,23 @@ export function commandArgs(command: string): string[] {
   }
   const subcommand = tokens[1];
   let pathsOnly = subcommand === "status" || subcommand === "ls-files";
+  let explicitPaths = false, hasPathspec = false;
   for (const arg of tokens.slice(2)) {
     const numericFlag = (subcommand === "log" || subcommand === "show") && /^(?:-n\d+|--max-count=\d+)$/.test(arg)
       || (subcommand === "diff" || subcommand === "show") && /^-U\d+$/.test(arg);
     if (arg.startsWith("-") && !FLAGS[subcommand].has(arg) && !numericFlag) throw new Error(`Unsupported ${subcommand} flag: ${arg}`);
     if (!arg || arg.startsWith("/") || arg.includes(":") || arg.split("/").includes("..")) throw new Error("Command operands must stay in the workspace; Git revision:path operands are unsupported.");
-    if (arg === "--") { pathsOnly = true; continue; }
+    if (arg === "--" && !explicitPaths) { pathsOnly = true; explicitPaths = true; continue; }
     if (!arg.startsWith("-") && !pathsOnly && !/^HEAD(?:~\d*|\^\d*)*$/.test(arg)) {
       throw new Error("Only HEAD commit revisions are supported; put workspace paths after --.");
     }
+    if (pathsOnly && (explicitPaths || !arg.startsWith("-"))) hasPathspec = true;
   }
-  // Git defaults diff/show/log to the repository, even from a nested cwd.
-  // Always supply a literal cwd-relative pathspec when no paths were given.
-  const separator = tokens.indexOf("--", 2);
-  if (separator === -1) tokens.push("--", ".");
-  else if (separator === tokens.length - 1) tokens.push(".");
+  // Scope implicit repository reads to cwd, but never add to an existing pathspec.
+  if (!hasPathspec) {
+    if (!explicitPaths) tokens.push("--");
+    tokens.push(".");
+  }
   return tokens.slice(1);
 }
 

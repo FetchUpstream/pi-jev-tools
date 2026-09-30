@@ -54,31 +54,39 @@ export function validateResponse(response: unknown, questions: Questions): asser
       if (!isNonnegative(answer.score) || answer.score > keys.length - 1) {
         throw new ContractError(`Score out of range: ${id}`);
       }
-      // Normalize the permitted rounded probability sum; allow two-decimal score rounding.
-      const weighted = keys.reduce((acc, k, i) => acc + i * (probs[k] as number), 0) / sum;
-      if (Math.abs(answer.score - weighted) > 0.005 + 1e-9) {
-        throw new ContractError(`Score must match the probability-weighted position: ${id}`);
-      }
+      // Score and legend are redundant; validate their wire shape, not equality.
+      // Canonical values come from the validated distribution and original rubric.
       const legend = answer.legend;
       if (!isObject(legend) || Object.keys(legend).length !== keys.length ||
-        !keys.every((k, i) => Object.hasOwn(legend, k) && legend[k] === q.criteria[i])) {
-        throw new ContractError(`Score legend must match the declared criteria: ${id}`);
+        !keys.every((k) => Object.hasOwn(legend, k) && typeof legend[k] === "string")) {
+        throw new ContractError(`Score legend must contain the declared level keys and string descriptions: ${id}`);
       }
     }
   }
 }
 
 /** Only known typed values reach Pi, never provider extensions or raw exchanges. */
-function compactAnswer(a: Answer): Answer {
+function compactAnswer(a: Answer, q: Questions[string]): Answer {
   switch (a.type) {
     case "noul": return { type: a.type, noul: a.noul };
     case "choice": return { type: a.type, choice: a.choice, confidence: a.confidence, probabilities: a.probabilities };
-    case "score": return { type: a.type, score: a.score, confidence: a.confidence, probabilities: a.probabilities, legend: a.legend };
+    case "score": {
+      if (q.type !== "score") throw new ContractError("Mismatched score rubric.");
+      const keys = q.criteria.map((_, i) => String(i));
+      const sum = keys.reduce((total, key) => total + a.probabilities[key], 0);
+      const weighted = keys.reduce((total, key, i) => total + i * a.probabilities[key], 0) / sum;
+      // A validated mean cannot exceed the top level except by floating-point error.
+      const score = Math.min(keys.length - 1, weighted);
+      return {
+        type: a.type, score, confidence: a.confidence, probabilities: a.probabilities,
+        legend: Object.fromEntries(q.criteria.map((level, i) => [String(i), level])),
+      };
+    }
   }
 }
 
 export function compactResponse(response: SystemOneResponse, questions: Questions) {
-  const answers = Object.fromEntries(Object.keys(questions).map((id) => [id, compactAnswer(response.answers[id])]));
+  const answers = Object.fromEntries(Object.keys(questions).map((id) => [id, compactAnswer(response.answers[id], questions[id])]));
   const { input_tokens, output_tokens, cost } = response.usage;
   return {
     answers, model: response.model,

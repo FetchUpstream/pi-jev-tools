@@ -31,6 +31,38 @@ test("ask_jev strengthens the gate to refuse reversible effects", async () => {
 test("policy allows only documented git reads and flags", () => {
   for (const command of ["git status --short --branch", "git diff --stat", "git diff --cached -U3 HEAD -- src/auth.ts", 'git diff -- "src/space name.ts"', "git log --oneline -n5", "git show HEAD", "git ls-files --others --exclude-standard"]) expect(commandArgs(command)[0]).toBe(command.split(" ")[1]);
 });
+test("implicit cwd pathspec is added only when no path operand exists", () => {
+  for (const [command, expected] of [
+    ["git ls-files a.ts", ["ls-files", "a.ts"]],
+    ["git status --short a.ts", ["status", "--short", "a.ts"]],
+    ["git diff -- a.ts", ["diff", "--", "a.ts"]],
+    ["git diff HEAD -- a.ts", ["diff", "HEAD", "--", "a.ts"]],
+    ["git diff", ["diff", "--", "."]],
+    ["git status --short", ["status", "--short", "--", "."]],
+    ["git diff HEAD", ["diff", "HEAD", "--", "."]],
+    ["git diff HEAD~1 --", ["diff", "HEAD~1", "--", "."]],
+    ["git ls-files --", ["ls-files", "--", "."]],
+    ["git status --short -- -s", ["status", "--short", "--", "-s"]],
+    ["git ls-files -- --", ["ls-files", "--", "--"]],
+    ["git diff -- --", ["diff", "--", "--"]],
+  ] as const) expect(commandArgs(command)).toEqual([...expected]);
+  for (const command of ["git diff a.ts", "git diff main", "git show refs/heads/main", "git status -- ../a.ts"]) expect(() => commandArgs(command)).toThrow();
+});
+test("real targeted Git reads exclude other changed files", async () => {
+  const dir = await fixture({ "a.ts": "a", "b.ts": "b" }); dirs.push(dir);
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"], { cwd: dir });
+  await writeFile(join(dir, "a.ts"), "changed a");
+  await writeFile(join(dir, "b.ts"), "changed b");
+  for (const command of ["git ls-files a.ts", "git status --short a.ts", "git diff -- a.ts", "git diff HEAD -- a.ts"]) {
+    const result = await runSafeCommand(command, dir, safe);
+    expect(result.exit_code).toBe(0);
+    expect(result.stdout).toContain("a.ts");
+    expect(result.stdout).not.toContain("b.ts");
+  }
+  for (const command of ["git diff", "git status --short"]) expect((await runSafeCommand(command, dir, safe)).stdout).toContain("b.ts");
+});
 for (const command of ["rm -rf x", "git reset --hard", "git clean -fd", "git push --force", "npm test", "bun test", "node -e 'x'", "git -c alias.x=x status", "git status; rm x", "git status && rm x", "git status | cat", "git diff > out", "git show $(id)", "git show `id`", "git status\nrm x", "git diff --output=out", "git diff --ext-diff", "git show --textconv", "git diff --no-index a b", "git diff ../../outside", "git diff /etc/passwd", "git show --format=%x00", 'git diff "unclosed']) {
   test(`policy rejects ${JSON.stringify(command)}`, () => { expect(() => commandArgs(command)).toThrow(); });
 }

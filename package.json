@@ -8,9 +8,10 @@
   "keywords": ["pi-package", "jev", "typesafe"],
   "engines": { "node": ">=22.19.0" },
   "pi": { "extensions": ["./extensions/jev/index.ts"] },
-  "files": ["extensions", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+  "files": ["extensions", "docs", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "devDependencies": {
@@ -25,6 +26,7 @@
     "typecheck": "tsc --noEmit",
     "test:integration": "JEV_LIVE=1 bun run scripts/integration.ts",
     "verify:pi": "bun run scripts/verify-pi.ts",
+    "verify:ui": "bun run scripts/verify-ui.ts",
     "verify:behavior": "JEV_POLICY_LIVE=1 bun run scripts/verify-behavior.ts"
   }
 }

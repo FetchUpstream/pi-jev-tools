@@ -65,9 +65,12 @@ export async function expandPatterns(patterns: string[], cwd: string, recursive:
     }
     if (!info?.isDirectory() || exclude(pattern)) { out.add(pattern); continue; }
     let found = false;
-    const base = pattern.replace(/\/+$/, "");
-    for await (const path of glob(`${base}/${recursive ? "**/*" : "*"}`, { cwd, exclude })) {
-      out.add(String(path)); found = true;
+    // The path already exists: make it glob's cwd, never part of its pattern.
+    // User glob inputs above remain untouched, including character classes/braces.
+    const directory = resolve(cwd, pattern);
+    const excludeChild = (path: string) => exclude(relative(cwd, resolve(directory, path)));
+    for await (const path of glob(recursive ? "**/*" : "*", { cwd: directory, exclude: excludeChild })) {
+      out.add(relative(cwd, resolve(directory, String(path)))); found = true;
     }
     if (!found) skipped.push({ path: pattern, reason: `no files matched: ${pattern}` });
   }

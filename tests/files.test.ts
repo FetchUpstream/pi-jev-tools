@@ -73,3 +73,31 @@ test("realpath aliases share a cap slot and a stable display path", async () => 
   expect(result.files).toEqual(["a.ts", "b.ts"]);
   expect(result.skipped).toEqual([]);
 });
+
+test("existing metacharacter directories stay literal while user globs still expand", async () => {
+  const names = ["[id]", "[slug]", "{admin}", "foo*"];
+  const files = Object.fromEntries(names.flatMap((name) => [
+    [`src/${name}/${name === "[slug]" ? "index" : name === "foo*" ? "literal" : "page"}.ts`, "code"],
+    [`src/${name}/nested/deep.ts`, "deep"],
+    [`src/${name}/node_modules/junk.ts`, "junk"],
+    [`src/${name}/binary.dat`, Buffer.from([0])],
+  ]));
+  const dir = await make(files);
+  for (const name of names) {
+    const base = `src/${name}`;
+    const direct = await pruneFiles(await expandPatterns([base], dir, false), dir);
+    expect(direct.files).toEqual(Object.keys(files).filter((path) => path.startsWith(`${base}/`) && path.endsWith(".ts") && !path.includes("/nested/") && !path.includes("/node_modules/")));
+    const recursive = await pruneFiles(await expandPatterns([base, base], dir, true), dir, 2);
+    expect(recursive.files).toHaveLength(2);
+    expect(recursive.files.every((path) => path.startsWith(`${base}/`))).toBe(true);
+    expect(recursive.skipped.some((skip) => skip.reason.includes("binary"))).toBe(true);
+    expect(recursive.skipped.some((skip) => skip.path.includes("node_modules"))).toBe(false);
+  }
+  const globbed = await pruneFiles(await expandPatterns(["src/**/*.ts"], dir, false), dir);
+  expect(globbed.files).toHaveLength(8);
+  const outside = await make({ "secret.ts": "outside" });
+  await symlink(outside, join(dir, "src/[escape]"));
+  const escaped = await pruneFiles(await expandPatterns(["src/[escape]"], dir, true), dir);
+  expect(escaped.files).toEqual([]);
+  expect(escaped.skipped.some((skip) => skip.reason.includes("outside"))).toBe(true);
+});

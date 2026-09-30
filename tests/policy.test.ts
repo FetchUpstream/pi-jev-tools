@@ -64,5 +64,8 @@ test("policy excludes exact deterministic answers, generation/editing and comple
   expect(JEV_USAGE_POLICY).toContain("Do not use Jev for code generation, code editing or complex multi-step reasoning");
   expect(JEV_USAGE_POLICY).toContain("passing paths or command to ask_jev instead of first loading");
   expect(JEV_USAGE_POLICY).toContain("Batch multiple questions about the same state into one Jev request");
-  expect(JEV_USAGE_POLICY.split(/\s+/).length).toBeLessThan(300);
+  expect(JEV_USAGE_POLICY.split(/\s+/).length).toBeLessThan(550);
+});
+test("policy selects question types, verifies hypotheses and preserves partial successes", () => {
+  for (const rule of ["Prefer noul for filtering", "Prefer choice for categories", "Use score only when continuous ordinal position", "triage or hypotheses, not proof", "verify with deterministic evidence", "Read only the narrowed candidate set", "Retry only affected files", "do not rerun successes or endlessly retry"]) expect(JEV_USAGE_POLICY).toContain(rule);
 });

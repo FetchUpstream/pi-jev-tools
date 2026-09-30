@@ -92,11 +92,39 @@ concept checks, candidate filtering, large-file-group triage and judgments of
 command output/repository state. It prefers `paths`/`command` over loading
 contents first and batching questions that share state.
 
+Ordinary triage uses **noul** for relevance/filtering and **choice** for categories or risk buckets. **Score** is reserved for useful continuous positions on an ordered scale. Jev findings are hypotheses: inspect only the selected candidates and confirm defects with a reproduction, test or another exact tool before reporting them. On partial batch failures, keep successful judgments and retry only affected files when another bounded form is useful; do not endlessly retry.
+
 Exact questions still belong to grep, parsers, compilers, tests, type checkers
 and other deterministic tools. Jev is not for generation, editing or complex
 multi-step reasoning. This is model guidance, not forced routing: the primary
 model still decides which tool is appropriate. Jev credentials remain required
 for successful judgments.
+
+## Human-facing tool display
+
+All six tools use Pi's `renderCall`/`renderResult` hooks and host-provided `Text` components. The terminal shows question, answer and confidence—not JSON. For example:
+
+```text
+ask_jev · extensions/jev/lib/command.ts
+  Could this handling broaden a pathspec?
+  Yes · 72%
+
+ask_jev · extensions/jev/lib/files.ts
+  Which category best fits?
+  Security boundary · 54%
+
+ask_jev · extensions/jev/lib/client.ts
+  Where on the ordered scale?
+  Complex / likely bug · 90%
+
+pick_first_file
+  Which file should be inspected first?
+  extensions/jev/lib/command.ts · 81%
+```
+
+Noul `0.24` displays **No · 76%**, confidence in the displayed answer. Choice and score use validated provider confidence (not the winning probability). Batch tools show each question once, then per-file answers; normal views show up to six files and four questions. Expand to see all human-readable rows. Meaningful omissions and partial/complete failures remain visible; expected binary/generated skips stay quiet.
+
+Rendering does not change `content`, `details`, `structuredContent`, distributions, state summaries or nested usage/cost accounting. The separate score correctness fix derives score/legend locally after strict validation; see [Score contract investigation](docs/score-contract.md).
 
 ## Tools
 
@@ -174,7 +202,7 @@ splitting or narrowing inputs; content is not silently truncated.
 Globs use Node's `fs.promises.glob`; directories are nonrecursive for
 `ask_jev_files` unless `recursive: true`, and recursive for `ask_jev`.
 Files are deduplicated by resolved real path, with workspace-relative display paths.
-Existing bracketed filenames (such as `[id].ts`) are retained. Unmatched patterns
+Existing literal filenames and directories (including `[id]`, `[slug]`, `{admin}` and `foo*`) remain literal. Actual user-supplied glob expressions still expand. Unmatched patterns
 are reported separately in `skipped`; binary detection happens before file-cap allocation.
 A failed file does not discard the other results. If all attempted judgments
 fail, Pi receives an error result with the structured skipped reasons retained.
@@ -258,6 +286,7 @@ bun install --frozen-lockfile --ignore-scripts
 bun test                     # mocked/offline; never consumes paid API calls
 bun run typecheck
 bun run verify:pi            # requires installed pi and Git, no paid model
+bun run verify:ui            # installed JSON + real TUI, mocked transports; needs script/stty
 bun run test:integration     # EXPLICIT opt-in: one small real Jev request
 ```
 
@@ -276,9 +305,9 @@ installs contain no duplicate Pi/TypeBox copies. No `-e`, upstream checkout,
 GitHub push or changes to your real Pi settings are involved. This verifies
 Git package shape, not remote publication/access.
 
-Verified with Pi 0.99.1, Node 25.0.0 and Bun 1.3.7: **80 unit tests pass**,
-TypeScript checks pass, and both installed CLI-session checks pass. Live Jev
-verification was skipped because no supported provider credentials were present.
+`verify:ui` installs the current working copy into an isolated Pi profile, triggers every tool through a scripted loopback primary, and inspects the actual interactive terminal output in a pseudoterminal. It exercises expansion, partial and complete failures, and verifies complete model-facing results plus nested tokens/cost. Its Jev transport is a deterministic fixture, not a shipped mock backend.
+
+Verified with Pi 0.99.1, Node 25.0.0 and Bun 1.3.7: unit tests, TypeScript, package installation and interactive rendering checks pass. Live Jev score responses were also inspected separately; exact captured mismatch values are tested and documented in [Score contract investigation](docs/score-contract.md).
 
 ### Real-primary behavioral verification
 
@@ -292,21 +321,22 @@ This consumes **primary-model** quota. It installs the package into an isolated
 Pi profile, disables context-file discovery (including `AGENTS.md`), and creates
 a 48-file synthetic repository. The primary model is real and unscripted; neither
 user prompt mentions Jev. Only Jev's transport is mocked with fixture-specific
-answers because no Jev credential was available. No mock backend is shipped in
-the installed extension; this verifies tool selection, not Jev judgment quality.
+answers for reproducible policy verification without paid Jev calls. No mock
+backend is shipped in the installed extension; this verifies tool selection, not Jev judgment quality.
 
 Observed with `openai-codex/gpt-6.1-sol`:
 
 ```text
-Semantic exploration: ls → find → ask_jev_files → read → read → grep
-                     48 candidates judged, only 2 selected implementations read
+Semantic code review: ls → find → ask_jev_files → read → read → bash → bash
+                      noul/choice triage, 2/48 files read, executable reproduction
 Exact literal search: grep; zero Jev calls
 ```
 
 The check asserts discovery precedes semantic filtering, no files are read before
 filtering, only selected implementations are read afterward, and the marked
-policy appears exactly once in each captured primary request. The exact-search
-control asserts zero Jev tool/transport calls. Temporary fixtures and profile
+policy appears exactly once in each captured primary request. Triage must use noul/choice,
+and source inspection must be followed by a successful executable reproduction.
+The exact-search control asserts zero Jev tool/transport calls. Temporary fixtures and profile
 are removed afterward. Model decisions can vary; this is guidance, not a routing
 guarantee across every model and task.
 
@@ -316,7 +346,7 @@ guarantee across every model and task.
   manually loaded extensions; a marked `before_agent_start` usage policy
   proactively teaches bounded delegation without unverifiable price/latency claims.
 - Both upstream providers and core precedence; no production mock backend.
-- No full-state stderr/session telemetry, UI hooks or assumed-price spend ledger.
+- No full-state stderr/session telemetry or assumed-price spend ledger; human-only tool renderers are separate from structured results.
 - File safeguards also apply to single-file tools; workspace symlink confinement,
   explicit empty-pattern reasons, stable skipped ordering and attempted counts.
 - More restrictive read-only command policy plus the original judgment gate;

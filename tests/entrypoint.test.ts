@@ -51,7 +51,7 @@ test("package manifest points only to the registering entrypoint and declares ho
   expect(manifest.pi.extensions).toEqual(["./extensions/jev/index.ts"]);
   expect(manifest.keywords).toContain("pi-package");
   expect(manifest.dependencies ?? {}).toEqual({});
-  expect(manifest.peerDependencies).toEqual({ "@earendil-works/pi-coding-agent": "*", typebox: "*" });
+  expect(manifest.peerDependencies).toEqual({ "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", typebox: "*" });
 });
 test("missing credentials reach configuration boundary without any network calls", async () => {
   for (const [name, params] of [

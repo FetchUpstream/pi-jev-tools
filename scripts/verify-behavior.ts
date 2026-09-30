@@ -98,7 +98,10 @@ async function investigate(name: string, prompt: string) {
   const events = output.trim().split("\n").map((line) => JSON.parse(line));
   const calls = events.filter((event) => event.type === "tool_execution_start");
   const failures = events.filter((event) => event.type === "tool_execution_end" && event.isError);
-  assert.equal(failures.length, 0, `${name}: tools failed: ${JSON.stringify(failures)}`);
+  // Exploratory shell probes may legitimately return nonzero (e.g. no node_modules).
+  // Read/Jev failures are regressions; the reproduction below must itself succeed.
+  const unexpected = failures.filter((event) => event.toolName !== "bash");
+  assert.equal(unexpected.length, 0, `${name}: tools failed: ${JSON.stringify(unexpected)}`);
   const assistantErrors = events.filter((event) => event.type === "message_end" && ["error", "aborted"].includes(event.message?.stopReason));
   assert.equal(assistantErrors.length, 0, `${name}: primary model failed: ${JSON.stringify(assistantErrors)}`);
   const trace = (await readFile(tracePath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -106,7 +109,7 @@ async function investigate(name: string, prompt: string) {
   assert(primary.length > 0, `${name}: no primary request carried the policy`);
   assert(primary.every((event) => event.policyCount === 1), `${name}: duplicated policy in a primary request`);
   console.log(`${name} tools: ${calls.map((call) => call.toolName).join(" → ")}`);
-  return { calls, trace };
+  return { calls, trace, events };
 }
 
 try {
@@ -121,16 +124,22 @@ try {
   for (let i = 0; i < 48; i++) await writeFile(join(workspace, "src", `module-${String(i).padStart(2, "0")}.ts`), source(i));
   await command(["install", repository]);
 
-  const semantic = await investigate("semantic exploration", "Investigate how records that become obsolete are eliminated and how associated handles get released in this repository. Identify the implementation modules and explain their exact behavior with file/line references. Do not change files.");
+  const semantic = await investigate("semantic code review", "Review this repository for correctness defects in how obsolete records are eliminated and associated handles released. Identify the implementation modules with file/line references. Confirm any reported defect with an executable reproduction. Do not change files.");
   const filterIndex = semantic.calls.findIndex((call) => call.toolName === "ask_jev_files");
   assert(filterIndex >= 0, "The primary model did not proactively use ask_jev_files for semantic filtering.");
   assert(semantic.calls.slice(0, filterIndex).some((call) => ["find", "ls", "grep", "bash"].includes(call.toolName)), "No deterministic discovery before semantic filtering.");
   const readsBefore = semantic.calls.slice(0, filterIndex).filter((call) => call.toolName === "read");
+  for (const call of semantic.calls.filter((call) => call.toolName === "ask_jev_files")) {
+    const questions: Record<string, { type: string }> = JSON.parse(call.args.questions_json);
+    assert(Object.values(questions).every((question) => ["noul", "choice"].includes(question.type)), "Ordinary repository triage used score rather than noul/choice.");
+  }
   assert.equal(readsBefore.length, 0, "Primary loaded files before semantic filtering.");
   const readPaths = semantic.calls.filter((call) => call.toolName === "read").map((call) => call.args.path);
   assert(readPaths.some((path) => /module-(11|28)\.ts$/.test(path)), "Primary did not read selected implementation details.");
   assert(readPaths.every((path) => /module-(11|28)\.ts$/.test(path)), "Primary read an unselected fixture module.");
   assert(new Set(readPaths).size < 48, "Primary read the entire candidate corpus.");
+  const lastRead = semantic.calls.findLastIndex((call) => call.toolName === "read");
+  assert(semantic.calls.slice(lastRead + 1).some((call) => call.toolName === "bash" && /\b(node|bun|python3?)\b/.test(call.args.command) && semantic.events.some((event) => event.type === "tool_execution_end" && event.toolCallId === call.toolCallId && !event.isError)), "Review lacked a successful executable deterministic reproduction after source inspection.");
   assert(!semantic.calls.some((call) => call.toolName === "bash" && /(?:cat|head|tail|sed).*src\/\*/.test(call.args.command)), "Primary loaded candidate corpus through bash.");
   const judged = new Set(semantic.trace.filter((event) => event.kind === "jev-mock").map((event) => event.path).filter(Boolean));
   assert(judged.size > 1, "Primary did not batch semantic judgments across candidate files.");
