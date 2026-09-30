@@ -63,6 +63,14 @@ test("real targeted Git reads exclude other changed files", async () => {
   }
   for (const command of ["git diff", "git status --short"]) expect((await runSafeCommand(command, dir, safe)).stdout).toContain("b.ts");
 });
+test("a second separator is a literal pathspec, not permission to broaden", async () => {
+  const dir = await fixture({ "--": "dash", "other.ts": "other" }); dirs.push(dir);
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["add", "."], { cwd: dir });
+  const result = await runSafeCommand("git ls-files -- --", dir, safe);
+  expect(result.exit_code).toBe(0);
+  expect(result.stdout).toBe("--\n");
+});
 for (const command of ["rm -rf x", "git reset --hard", "git clean -fd", "git push --force", "npm test", "bun test", "node -e 'x'", "git -c alias.x=x status", "git status; rm x", "git status && rm x", "git status | cat", "git diff > out", "git show $(id)", "git show `id`", "git status\nrm x", "git diff --output=out", "git diff --ext-diff", "git show --textconv", "git diff --no-index a b", "git diff ../../outside", "git diff /etc/passwd", "git show --format=%x00", 'git diff "unclosed']) {
   test(`policy rejects ${JSON.stringify(command)}`, () => { expect(() => commandArgs(command)).toThrow(); });
 }

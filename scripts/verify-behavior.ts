@@ -139,7 +139,13 @@ try {
   assert(readPaths.every((path) => /module-(11|28)\.ts$/.test(path)), "Primary read an unselected fixture module.");
   assert(new Set(readPaths).size < 48, "Primary read the entire candidate corpus.");
   const lastRead = semantic.calls.findLastIndex((call) => call.toolName === "read");
-  assert(semantic.calls.slice(lastRead + 1).some((call) => call.toolName === "bash" && /\b(node|bun|python3?)\b/.test(call.args.command) && semantic.events.some((event) => event.type === "tool_execution_end" && event.toolCallId === call.toolCallId && !event.isError)), "Review lacked a successful executable deterministic reproduction after source inspection.");
+  const reproduced = semantic.calls.slice(lastRead + 1).some((call) => {
+    const executable = call.toolName === "bash" && /\b(node|bun|python3?)\b/.test(call.args.command);
+    const runsCode = /(?:<<|\s-(?:e|c)\b|--eval\b)/.test(call.args.command ?? "");
+    const succeeded = semantic.events.some((event) => event.type === "tool_execution_end" && event.toolCallId === call.toolCallId && !event.isError);
+    return executable && runsCode && succeeded;
+  });
+  assert(reproduced, "Review lacked a successful executable deterministic reproduction after source inspection (version probes do not count).");
   assert(!semantic.calls.some((call) => call.toolName === "bash" && /(?:cat|head|tail|sed).*src\/\*/.test(call.args.command)), "Primary loaded candidate corpus through bash.");
   const judged = new Set(semantic.trace.filter((event) => event.kind === "jev-mock").map((event) => event.path).filter(Boolean));
   assert(judged.size > 1, "Primary did not batch semantic judgments across candidate files.");
