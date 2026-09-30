@@ -8,9 +8,9 @@ if (!process.env.TYPESAFE_API_KEY?.trim() && !process.env.OPENROUTER_API_KEY?.tr
 } else {
   const config = readConfig();
   const result = await new JevClient().systemOne({ message: "The token is valid." }, {
-    valid: { type: "noul", instructions: "Does `message` say the token is valid?" },
-    kind: { type: "choice", instructions: "What does `message` report?", criteria: { valid: "Valid token", invalid: "Invalid token", other: "Neither" } },
-    certainty: { type: "score", instructions: "How clear is `message`?", criteria: ["Ambiguous", "Explicit"] },
+    valid: { type: "noul", instructions: ["Does `message` say the token is valid?"], criteria: { true: { description: "Valid token" }, false: ["Invalid or unspecified"] } },
+    kind: { type: "choice", instructions: { question: "What does `message` report?" }, criteria: { valid: { description: "Valid token" }, invalid: ["Invalid token"], other: null } },
+    certainty: { type: "score", instructions: "How clear is `message`?", criteria: [{ description: "Ambiguous" }, ["Explicit"]] },
   });
   console.log(JSON.stringify({ provider: config.provider, ...result }));
 }

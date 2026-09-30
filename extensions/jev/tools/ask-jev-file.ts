@@ -10,7 +10,7 @@ async function ask(path: string, cwd: string, questions: Questions, decide: Deci
 
 export async function askFileBool(path: string, question: string, cwd: string, criteria: { yes?: string; no?: string }, decide: Decide) {
   const { answers, usage } = await ask(path, cwd, {
-    answer: { type: "noul", instructions: question, criteria: { true: criteria.yes, false: criteria.no } },
+    answer: { type: "noul", instructions: question, criteria: { ...(criteria.yes === undefined ? {} : { true: criteria.yes }), ...(criteria.no === undefined ? {} : { false: criteria.no }) } },
   }, decide);
   const a = answers.answer;
   if (a.type !== "noul") throw new Error("Expected a noul answer.");
@@ -27,8 +27,9 @@ export async function askFileChoice(path: string, question: string, options: Rec
 }
 
 export async function askFileScore(path: string, question: string, levels: string[], cwd: string, decide: Decide) {
+  if (levels.length < 2 || levels.length > 10) throw new Error("Score helper needs between 2 and 10 levels.");
   const { answers, usage } = await ask(path, cwd, { answer: { type: "score", instructions: question, criteria: levels } }, decide);
   const a = answers.answer;
   if (a.type !== "score") throw new Error("Expected a score answer.");
-  return { path, score: a.score, top: levels.length - 1, nearest: a.legend[String(Math.round(a.score))], confidence: a.confidence, legend: a.legend, usage };
+  return { path, score: a.score, top: levels.length - 1, nearest: levels[Math.round(a.score)], confidence: a.confidence, legend: a.legend, usage };
 }

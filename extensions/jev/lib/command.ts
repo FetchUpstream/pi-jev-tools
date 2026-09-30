@@ -1,8 +1,7 @@
 import { execFile } from "node:child_process";
 import { devNull } from "node:os";
-import type { Decide } from "./client.ts";
 import type { CommandOutput } from "./assemble.ts";
-import { BLOCK_NOTICE, gateBashCommand } from "./bash-gate.ts";
+const BLOCK_NOTICE = "Use Pi's visible bash tool for commands outside the read-only Git allowlist.";
 
 const COMMON = new Set(["--", "--stat", "--numstat", "--shortstat", "--name-only", "--name-status", "--oneline", "--color=never"]);
 const FLAGS: Record<string, Set<string>> = {
@@ -53,13 +52,11 @@ export function commandArgs(command: string): string[] {
   return tokens.slice(1);
 }
 
-/** Deterministic policy first, then the extracted Jev gate, then execFile (never a shell). */
-export async function runSafeCommand(command: string, cwd: string, decide: Decide, signal?: AbortSignal): Promise<CommandOutput> {
+/** Execute only the deterministic read-only language, never a shell or model authorization. */
+export async function runSafeCommand(command: string, cwd: string, signal?: AbortSignal): Promise<CommandOutput> {
   let args: string[];
   try { args = commandArgs(command); }
-  catch (error) { throw new Error(`ask_jev command refused: ${(error as Error).message} ${BLOCK_NOTICE}`); }
-  const gate = await gateBashCommand(command, cwd, decide);
-  if (gate.block) throw new Error(`ask_jev command refused: ${gate.reason}. ${BLOCK_NOTICE}`);
+  catch (error) { throw new Error(`ask_jev command refused: ${error instanceof Error ? error.message : "Invalid command."} ${BLOCK_NOTICE}`); }
   signal?.throwIfAborted();
   const globalArgs = ["--no-pager", "-c", "core.fsmonitor=false", "-c", `core.hooksPath=${devNull}`, "-c", "core.quotePath=true"];
   if (["diff", "log", "show"].includes(args[0])) args = [args[0], "--no-ext-diff", "--no-textconv", ...args.slice(1)];

@@ -18,7 +18,7 @@ These exact answer values are regression-tested. They demonstrate that independe
 
 ## Narrow normalization
 
-Validate the entire envelope, answer type, confidence range, exact probability keys, finite unit probabilities, and the existing approximate-sum tolerance (0.025). Missing/invalid/out-of-range provider scores still fail. Legends must still be objects with exactly the declared level keys and string values; malformed/missing legends fail.
+Validate the entire envelope, answer type, confidence range, exact probability keys, finite unit probabilities, and the existing approximate-sum tolerance (0.025). Missing/invalid/out-of-range provider scores still fail. Legends must be objects with exactly the declared level keys and string/object/array JSON descriptions; malformed/missing legends fail. See [current contract alignment](typesafe-contract.md) for SDK/OpenAPI differences.
 
 After validation, construct a new compact score answer:
 

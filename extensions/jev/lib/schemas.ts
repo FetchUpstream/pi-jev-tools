@@ -4,7 +4,12 @@ export const Text = Type.String({ minLength: 1, pattern: "\\S" });
 export const Unit = Type.Number({ minimum: 0, maximum: 1 });
 export const Count = Type.Integer({ minimum: 0 });
 export const Probabilities = Type.Record(Type.String(), Unit);
-export const Legend = Type.Record(Type.String(), Type.String());
+// Live OpenAPI legend: JSON scalar leaves, non-null string/object/array entries.
+export const Structured = Type.Cyclic({
+  Json: Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null(), Type.Array(Type.Ref("Json")), Type.Record(Type.String(), Type.Ref("Json"))]),
+  Structured: Type.Union([Type.String(), Type.Array(Type.Ref("Json")), Type.Record(Type.String(), Type.Ref("Json"))]),
+}, "Structured");
+export const Legend = Type.Record(Type.String(), Structured);
 export const Usage = Type.Object({ input_tokens: Count, output_tokens: Count, cost: Type.Optional(Type.Number({ minimum: 0 })) }, { additionalProperties: false });
 export const Answer = Type.Union([
   Type.Object({ type: Type.Literal("noul"), noul: Unit }, { additionalProperties: false }),
@@ -28,7 +33,7 @@ export const ChoiceOutput = Type.Object({ path: Type.String(), choice: Type.Stri
 export const ScoreOutput = Type.Object({ path: Type.String(), score: Type.Number({ minimum: 0, maximum: 9 }), top: Type.Integer({ minimum: 1, maximum: 9 }), nearest: Type.String(), confidence: Unit, legend: Legend, usage: Usage }, { additionalProperties: false });
 export const FilesOutput = Type.Object({
   results: Type.Array(Type.Object({ path: Type.String(), answers: Answers, usage: Usage }, { additionalProperties: false })),
-  skipped: Skipped, calls: Count, attempts: Count,
+  skipped: Skipped, skipped_total: Count, skipped_by_reason: Type.Record(Type.String(), Count), calls: Count, attempts: Count,
 }, { additionalProperties: false });
 export const PickOutput = Type.Object({ path: Type.Union([Type.String(), Type.Null()]), confidence: Unit, probabilities: Probabilities }, { additionalProperties: false });
 export const GeneralOutput = Type.Object({ answers: Answers, usage: Usage, model: Type.String(), state_summary: Summary }, { additionalProperties: false });

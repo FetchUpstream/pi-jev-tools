@@ -47,6 +47,11 @@ Default precedence: **TypeSafe first**, then OpenRouter. Optional
 `JEV_BACKEND=typesafe` or `JEV_BACKEND=openrouter` selects one explicitly; a
 missing key for the selected provider fails rather than falling back.
 
+Model precedence is `JEV_MODEL` → `TYPESAFE_DEFAULT_MODEL` (TypeSafe SDK
+convention) or `OPENROUTER_MODEL` → the latest alias below. OpenRouter maps
+bare `jev-*` overrides to `~typesafe/jev-*`. The actual versioned response
+model is retained. No version is pinned by default.
+
 | Provider | Endpoint | Model |
 |---|---|---|
 | TypeSafe | `https://api.typesafe.ai/v1/systemone` | `jev-latest` |
@@ -87,7 +92,7 @@ Need exact implementation details → read the selected file with the primary mo
 ```
 
 The policy encourages proactive yes/no judgments, classification, relevance,
-risk/confidence estimates, explicit-scale scoring, known-option selection,
+bounded semantic risk assessment, explicit-scale scoring, known-option selection,
 concept checks, candidate filtering, large-file-group triage and judgments of
 command output/repository state. It prefers `paths`/`command` over loading
 contents first and batching questions that share state.
@@ -102,7 +107,7 @@ for successful judgments.
 
 ## Human-facing tool display
 
-All six tools use Pi's `renderCall`/`renderResult` hooks and host-provided `Text` components. The terminal shows question, answer and confidence—not JSON. For example:
+All six tools use Pi's `renderCall`/`renderResult` hooks and host-provided `Text` components. The terminal shows question, answer and answer probability (Noul) or confidence (Choice/Score)—not JSON. For example:
 
 ```text
 ask_jev · extensions/jev/lib/command.ts
@@ -122,7 +127,7 @@ pick_first_file
   extensions/jev/lib/command.ts · 81%
 ```
 
-Noul `0.24` displays **No · 76%**, confidence in the displayed answer. Choice and score use validated provider confidence (not the winning probability). Batch tools show each question once, then per-file answers; normal views show up to six files and four questions. Expand to see all human-readable rows. Meaningful omissions and partial/complete failures remain visible; expected binary/generated skips stay quiet.
+Noul `0.24` displays **No · 76%**, the no probability `1 - noul`, not TypeSafe confidence. Choice and score use validated provider confidence (not the winning probability). Batch tools show each question once, then per-file answers; normal views show up to six files and four questions. Expand to see all human-readable rows. Meaningful omissions and partial/complete failures remain visible; expected binary/generated skips stay quiet.
 
 Rendering does not change `content`, `details`, `structuredContent`, distributions, state summaries or nested usage/cost accounting. The separate score correctness fix derives score/legend locally after strict validation; see [Score contract investigation](docs/score-contract.md).
 
@@ -168,12 +173,20 @@ returned result—only typed judgments and a small input summary.
 ```
 
 - **noul**: probability of yes, `0..1`; the boolean building block returns true
-  only when `noul > 0.5` (a tie is false).
+  only when `noul > 0.5` (a tie is false). This is a convenience file-triage
+  decision boundary, not a universal TypeSafe threshold.
 - **choice**: 1–255 declared options, plus confidence and their probabilities.
   Provide an `other` exit. The single-file helper adds it if no `other`, `none`
   or `none_of_the_above` exists; the 255 limit includes that exit.
 - **score**: 2–10 described situations ordered low to high; a weighted numeric
   position from `0` to `levels.length - 1`, not an arbitrary prose rating.
+
+The general/batch question blocks accept structured string/object/array
+instructions and criteria with all JSON scalar leaves. Instructions are
+optional/nullable, and Noul/Choice descriptions can be null. Score levels
+and legends cannot be null; general questions also accept the OpenAPI's
+one-level Score. See [contract notes](docs/typesafe-contract.md) for wire/SDK
+differences and why `questions_json` remains the portable input boundary.
 
 Example tool arguments for the primary tool:
 
@@ -192,12 +205,13 @@ for arithmetic. Probabilities are judgments, not guarantees.
 
 ### Limits and batch behavior
 
-Upstream limits are retained: 240,000 bytes per file (60k tokens at the rough
-four-characters/token estimate), 255 files per batch, 16 concurrent requests,
-20 files per general call, 8,000 serialized characters of own state and a 60k
-state-token estimate. The complete wire request also checks the shared 64k
-estimate, including questions and JSON overhead. Overflow errors suggest
-splitting or narrowing inputs; content is not silently truncated.
+File reads have an early 128,000-byte ceiling. Before transport, serialized
+state + longest question must fit 32k tokens and state + all questions must
+fit 64k, including conservative JSON framing overhead. All use the same rough
+four-characters/token estimate (not an exact tokenizer). No fixed question
+allowance is subtracted. Limits remain 255 files per batch, 16 concurrent
+requests, 20 files per general call and 8,000 serialized characters of own
+state. Overflow errors suggest splitting/narrowing; content is not truncated.
 
 Globs use Node's `fs.promises.glob`; directories are nonrecursive for
 `ask_jev_files` unless `recursive: true`, and recursive for `ask_jev`.
@@ -223,12 +237,15 @@ and the automatic turn-hook usage policy. `tools/` implements Levels 8–10;
 and command safety. Node reads inputs internally, avoiding large file/output
 blocks in the primary model's context and delegating bounded inference to Jev.
 
-Requests have a 30-second total timeout and at most three attempts for upstream
-retry statuses 429/502/503/529, with bounded backoff and cancellation. HTTP,
-contract and network failures never switch providers. Only known response
-fields are returned. Usage from completed requests, including command-gate calls,
-is reported to Pi even when later execution fails. Only valid provider-reported
-cost is counted; absent cost
+Requests have a 30-second total deadline and at most three attempts for 408,
+429, 500–599, connection failures and transport timeouts. Retries honor
+`retry-after-ms` before `Retry-After` (up to 60s, otherwise exponential
+backoff); cancellation and the total deadline also interrupt waits and body
+delivery. Unlike the SDK's per-attempt timeout, the total deadline cannot
+be extended by retries. Contract failures do not retry. Errors are sanitized,
+and failures never switch providers. Only known response fields are returned.
+Usage from completed batch calls is reported to Pi even if later calls fail.
+Only valid provider-reported cost is counted; absent cost
 is omitted from tool data and contributes zero to Pi totals, **not a price
 estimate**. Failed requests may still incur provider charges not reported here.
 
@@ -267,10 +284,8 @@ estimate**. Failed requests may still incur provider charges not reported here.
   `--cached`, `--modified`, `--others`, `--exclude-standard`, `--stage`,
   `--unmerged`, `--eol`, `--full-name`. All accept `--` and ordinary relative
   paths/revisions. Simple quotes group spaces; Git pathspec expansion is disabled.
-- Before execution, the extracted Level 6 Jev gate must also approve a
-  **read_only** effect. Original thresholds block irreversible confidence
-  ≥0.6 or destructive probability ≥0.7. Gate errors fail closed. A permitted
-  command costs an extra Jev call. A refusal is final, not something to bypass.
+- Deterministic code authorizes only this read-only Git language. Unsupported
+  commands are refused, never submitted to Jev for permission.
 - Commands do not inherit API keys or Git environment overrides. Git pagers,
   external diff/textconv, fsmonitor, hooks, global/system config and optional
   index locks are disabled. Capture timeout is 60 seconds, buffer 800kB,
@@ -349,7 +364,7 @@ guarantee across every model and task.
 - No full-state stderr/session telemetry or assumed-price spend ledger; human-only tool renderers are separate from structured results.
 - File safeguards also apply to single-file tools; workspace symlink confinement,
   explicit empty-pattern reasons, stable skipped ordering and attempted counts.
-- More restrictive read-only command policy plus the original judgment gate;
+- Restricted, deterministic read-only command policy without model authorization;
   no hidden shell or test-script execution, and no truncated command output.
 - Strict input/response boundaries, shared wire-budget validation, cancellation,
   duplicate-candidate handling and a reserved `none` exit check.

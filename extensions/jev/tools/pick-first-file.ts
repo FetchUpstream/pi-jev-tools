@@ -6,7 +6,8 @@ export interface Candidate { path: string; note?: string }
 export async function pickFirstFile(question: string, candidates: Candidate[], decide: Decide) {
   if (!candidates.length) return { path: null, confidence: 0, probabilities: {} };
   if (candidates.some((c) => c.path === "none")) throw new Error('Candidate path "none" is reserved for the exit option.');
-  const selected = [...new Map(candidates.map((c) => [c.path, c])).values()].slice(0, LIMITS.MAX_CHOICE_OPTIONS - 1);
+  const selected = [...new Map(candidates.map((c) => [c.path, c])).values()];
+  if (selected.length >= LIMITS.MAX_CHOICE_OPTIONS) throw new Error(`pick_first_file has ${selected.length} unique candidates; maximum 254. Narrow the candidate list; no unique candidates were omitted.`);
   const criteria = Object.fromEntries([...selected.map((c) => [c.path, c.note ?? null]), ["none", "No file in the list fits"]]);
   const { answers } = await decide({ question, files: selected.map((c) => c.path) }, {
     pick: { type: "choice", instructions: question, criteria },

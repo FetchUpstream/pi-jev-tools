@@ -1,5 +1,5 @@
 // State and question parsing adapted from Ten Levels of Jev (MIT).
-import { validateQuestions, type Questions, type State } from "./types.ts";
+import { isEntryContent, validateQuestions, type Questions, type State } from "./types.ts";
 
 export function parseQuestions(json: string): Questions {
   let parsed: unknown;
@@ -17,7 +17,10 @@ export function parseQuestions(json: string): Questions {
 
 /** JSON objects/arrays preserve their structure; other text remains plain text. */
 export function parseState(raw: string | Record<string, unknown>): State {
-  if (typeof raw !== "string") return raw;
+  if (typeof raw !== "string") {
+    if (!isEntryContent(raw)) throw new Error("State must contain only JSON content.");
+    return raw;
+  }
   const trimmed = raw.trim();
   if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
     try { return JSON.parse(trimmed); } catch { /* Treat malformed JSON as text, as upstream does. */ }
@@ -28,5 +31,5 @@ export function parseState(raw: string | Record<string, unknown>): State {
 export const QUESTION_DESCRIPTION =
   'questions_json is an object keyed by id: noul {"type":"noul","instructions":"Is ...?","criteria":{"true":"yes case","false":"no case"}}; ' +
   'choice {"type":"choice","instructions":"Which ...?","criteria":{"a":"when a","other":"none fit"}} (1–255 keys); ' +
-  'score {"type":"score","instructions":"How risky ...?","criteria":["isolated/tested","security sensitive"]} (2–10 ordered situations). ' +
-  "Ask all needed questions in one block. Answers are probabilities, declared choices or weighted scores, never prose.";
+  'score {"type":"score","instructions":"How risky ...?","criteria":["isolated/tested","security sensitive"]} (1–10 ordered situations; prefer at least 2). ' +
+  "Instructions may be omitted/null; instructions and descriptions support structured JSON objects/arrays. Noul/Choice descriptions may be null; Score levels cannot. Ask all needed questions in one block. Answers are probabilities, declared choices or weighted scores, never prose.";

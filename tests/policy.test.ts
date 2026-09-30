@@ -60,8 +60,8 @@ test("policy teaches proactive bounded judgments and explicit repository/tool hi
 });
 test("policy excludes exact deterministic answers, generation/editing and complex reasoning", () => {
   expect(JEV_USAGE_POLICY).toContain("grep, a parser, compiler, test, type checker");
-  expect(JEV_USAGE_POLICY).toContain("do not call Jev unnecessarily");
-  expect(JEV_USAGE_POLICY).toContain("Do not use Jev for code generation, code editing or complex multi-step reasoning");
+  for (const phrase of ["arithmetic", "counting", "exact matching", "date arithmetic/comparison", "deterministic parsing", "code generation", "text generation", "multi-hop System Two reasoning"]) expect(JEV_USAGE_POLICY).toContain(phrase);
+  expect(JEV_USAGE_POLICY).not.toContain("confidence estimates");
   expect(JEV_USAGE_POLICY).toContain("passing paths or command to ask_jev instead of first loading");
   expect(JEV_USAGE_POLICY).toContain("Batch multiple questions about the same state into one Jev request");
   expect(JEV_USAGE_POLICY.split(/\s+/).length).toBeLessThan(550);

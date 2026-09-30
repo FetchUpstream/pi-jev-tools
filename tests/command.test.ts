@@ -2,32 +2,13 @@ import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gateBash, gateBashCommand } from "../extensions/jev/lib/bash-gate.ts";
 import { commandArgs, runSafeCommand } from "../extensions/jev/lib/command.ts";
 import type { Decide } from "../extensions/jev/lib/client.ts";
 import { askJev } from "../extensions/jev/tools/ask-jev.ts";
 import { fakeDecide, fixture, Q_JSON } from "./support.ts";
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
-const safe: Decide = async (s, q) => {
-  const r = await fakeDecide(s, q);
-  if ("destructive_intent" in q) r.answers.destructive_intent = { type: "noul", noul: 0.01 };
-  return r;
-};
-test("upstream irreversible/destructive thresholds are retained", () => {
-  const effect = { type: "choice" as const, choice: "irreversible", confidence: 0.6, probabilities: {} };
-  expect(gateBash({ effect, destructive_intent: { type: "noul", noul: 0 } }).block).toBe(true);
-  expect(gateBash({ effect: { ...effect, choice: "read_only" }, destructive_intent: { type: "noul", noul: 0.7 } }).block).toBe(true);
-  expect(gateBash({ effect: { ...effect, choice: "reversible" }, destructive_intent: { type: "noul", noul: 0.2 } }).block).toBe(false);
-});
-test("ask_jev strengthens the gate to refuse reversible effects", async () => {
-  const reversible: Decide = async (s, q) => {
-    const r = await safe(s, q);
-    if (r.answers.effect.type === "choice") r.answers.effect.choice = "reversible";
-    return r;
-  };
-  expect((await gateBashCommand("git status", "/tmp", reversible)).block).toBe(true);
-});
+const safe: Decide = fakeDecide;
 test("policy allows only documented git reads and flags", () => {
   for (const command of ["git status --short --branch", "git diff --stat", "git diff --cached -U3 HEAD -- src/auth.ts", 'git diff -- "src/space name.ts"', "git log --oneline -n5", "git show HEAD", "git ls-files --others --exclude-standard"]) expect(commandArgs(command)[0]).toBe(command.split(" ")[1]);
 });
@@ -56,29 +37,34 @@ test("real targeted Git reads exclude other changed files", async () => {
   await writeFile(join(dir, "a.ts"), "changed a");
   await writeFile(join(dir, "b.ts"), "changed b");
   for (const command of ["git ls-files a.ts", "git status --short a.ts", "git diff -- a.ts", "git diff HEAD -- a.ts"]) {
-    const result = await runSafeCommand(command, dir, safe);
+    const result = await runSafeCommand(command, dir);
     expect(result.exit_code).toBe(0);
     expect(result.stdout).toContain("a.ts");
     expect(result.stdout).not.toContain("b.ts");
   }
-  for (const command of ["git diff", "git status --short"]) expect((await runSafeCommand(command, dir, safe)).stdout).toContain("b.ts");
+  for (const command of ["git diff", "git status --short"]) expect((await runSafeCommand(command, dir)).stdout).toContain("b.ts");
 });
 test("a second separator is a literal pathspec, not permission to broaden", async () => {
   const dir = await fixture({ "--": "dash", "other.ts": "other" }); dirs.push(dir);
   execFileSync("git", ["init", "-q"], { cwd: dir });
   execFileSync("git", ["add", "."], { cwd: dir });
-  const result = await runSafeCommand("git ls-files -- --", dir, safe);
+  const result = await runSafeCommand("git ls-files -- --", dir);
   expect(result.exit_code).toBe(0);
   expect(result.stdout).toBe("--\n");
 });
 for (const command of ["rm -rf x", "git reset --hard", "git clean -fd", "git push --force", "npm test", "bun test", "node -e 'x'", "git -c alias.x=x status", "git status; rm x", "git status && rm x", "git status | cat", "git diff > out", "git show $(id)", "git show `id`", "git status\nrm x", "git diff --output=out", "git diff --ext-diff", "git show --textconv", "git diff --no-index a b", "git diff ../../outside", "git diff /etc/passwd", "git show --format=%x00", 'git diff "unclosed']) {
   test(`policy rejects ${JSON.stringify(command)}`, () => { expect(() => commandArgs(command)).toThrow(); });
 }
-test("refused commands never call gate or spawn; gate failure is fail-closed", async () => {
+test("read-only Git needs no Jev authorization; unknown commands are refused", async () => {
   const dir = await fixture(); dirs.push(dir);
-  await expect(runSafeCommand("git reset --hard", dir, async () => { throw new Error("must not call"); })).rejects.toThrow("command refused");
-  await expect(runSafeCommand("git status", dir, async () => { throw new Error("gate unavailable"); })).rejects.toThrow("gate unavailable");
-  await expect(runSafeCommand("git status", dir, fakeDecide)).rejects.toThrow("destructive intent");
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  await expect(runSafeCommand("git reset --hard", dir)).rejects.toThrow("command refused");
+  expect((await runSafeCommand("git status", dir)).exit_code).toBe(0);
+  let calls = 0;
+  await askJev({ command: "git status", questions_json: Q_JSON }, dir, async (s, q) => {
+    calls++; expect(Object.keys(q)).toEqual(["q"]); return fakeDecide(s, q);
+  });
+  expect(calls).toBe(1);
 });
 test("real git output stays internal; external diff and fsmonitor are disabled", async () => {
   const dir = await fixture({ "a.ts": "const a = 1;" }); dirs.push(dir);
@@ -89,15 +75,15 @@ test("real git output stays internal; external diff and fsmonitor are disabled",
   // These commands would write files if Git invoked repo-defined external helpers.
   execFileSync("git", ["config", "diff.external", "touch diff-marker"], { cwd: dir });
   execFileSync("git", ["config", "core.fsmonitor", "touch monitor-marker"], { cwd: dir });
-  const diff = await runSafeCommand("git diff", dir, safe);
+  const diff = await runSafeCommand("git diff", dir);
   expect(diff.stdout).toContain("+const a = 2;");
   expect(diff.exit_code).toBe(0);
-  const status = await runSafeCommand("git status --short", dir, safe);
+  const status = await runSafeCommand("git status --short", dir);
   expect(status.stdout).toContain("a.ts");
   expect(status.stdout).not.toContain("marker");
   const r = await askJev({ command: "git diff", questions_json: Q_JSON }, dir, safe);
   expect(JSON.stringify(r)).not.toContain("const a");
-  for (const command of ["git log --oneline -n1", "git show --stat HEAD", "git ls-files"]) expect((await runSafeCommand(command, dir, safe)).exit_code).toBe(0);
+  for (const command of ["git log --oneline -n1", "git show --stat HEAD", "git ls-files"]) expect((await runSafeCommand(command, dir)).exit_code).toBe(0);
 });
 
 test("nested workspaces reject Git object operands and scope implicit reads to cwd", async () => {
@@ -107,12 +93,12 @@ test("nested workspaces reject Git object operands and scope implicit reads to c
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"], { cwd: dir });
   const cwd = join(dir, "app");
   for (const command of ["git show HEAD:outside.txt", "git show HEAD:../outside.txt", "git show HEAD^{tree}", "git diff HEAD:outside.txt HEAD:app/inside.txt", "git show :/fixture", "git show -- :../outside.txt"]) {
-    await expect(runSafeCommand(command, cwd, async () => { throw new Error("must not call gate"); })).rejects.toThrow("command refused");
+    await expect(runSafeCommand(command, cwd)).rejects.toThrow("command refused");
   }
   await writeFile(join(dir, "outside.txt"), "OUTSIDE_CHANGED");
   await writeFile(join(cwd, "inside.txt"), "INSIDE_CHANGED");
   for (const command of ["git show HEAD", "git show --stat HEAD", "git log -n1", "git diff", "git diff HEAD -- inside.txt", "git status --short", "git ls-files"]) {
-    const result = await runSafeCommand(command, cwd, safe);
+    const result = await runSafeCommand(command, cwd);
     expect(result.exit_code).toBe(0);
     expect(result.stdout).not.toContain("OUTSIDE");
     expect(result.stdout).not.toContain("outside.txt");

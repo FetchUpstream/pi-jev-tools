@@ -1,4 +1,4 @@
-import type { Answer, Questions } from "../lib/types.ts";
+import { validateQuestions, type Answer, type Questions } from "../lib/types.ts";
 import type { Skipped } from "../lib/files.ts";
 
 export type ToolName = "ask_jev" | "ask_jev_files" | "pick_first_file" | "ask_jev_file_bool" | "ask_jev_file_choice" | "ask_jev_file_score";
@@ -41,31 +41,38 @@ export function formatPath(path: string, limit = 80): string {
 export function formatConfidence(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
+/** Extract a short human label, never dump structured JSON into the terminal. */
 export function formatQuestion(instructions: unknown, fallback = "Judgment", limit = 180): string {
-  if (typeof instructions === "string") return compactText(instructions, limit);
-  if (instructions && typeof instructions === "object" && !Array.isArray(instructions)) {
-    const fields = instructions as Record<string, unknown>;
-    for (const key of ["question", "prompt", "instructions", "task", "text"]) {
-      if (typeof fields[key] === "string") return compactText(fields[key], limit);
+  function label(value: unknown, depth: number): string | undefined {
+    if (typeof value === "string" && value.trim()) return value;
+    if (depth > 8 || !value || typeof value !== "object") return undefined;
+    if (Array.isArray(value)) return value.map((entry) => label(entry, depth + 1)).filter(Boolean).join(" · ") || undefined;
+    for (const key of ["question", "label", "description", "prompt", "instructions", "task", "text"]) {
+      if (key in value) {
+        const found = label(Reflect.get(value, key), depth + 1);
+        if (found) return found;
+      }
     }
+    return undefined;
   }
-  return compactText(fallback.replace(/[_-]/g, " "), limit);
+  return compactText(label(instructions, 0) ?? fallback.replace(/[_-]/g, " "), limit);
 }
 export function formatNoul(noul: number): string {
-  return `${noul > 0.5 ? "Yes" : "No"} · ${formatConfidence(Math.max(noul, 1 - noul))}`;
+  // Displayed-answer probability, not Choice/Score confidence.
+  return `${noul > 0.5 ? "Yes" : "No"} · ${Math.round(Math.max(noul, 1 - noul) * 100)}%`;
 }
-export function formatChoice(choice: string, confidence: number, criteria?: Record<string, string | null>): string {
-  const label = criteria?.[choice] || choice.replace(/[_-]/g, " ");
-  return `${compactText(label, 100)} · ${formatConfidence(confidence)}`;
+export function formatChoice(choice: string, confidence: number, criteria?: Record<string, unknown>): string {
+  return `${formatQuestion(criteria?.[choice], choice, 100)} · ${formatConfidence(confidence)}`;
 }
-export function formatScore(label: string, confidence: number): string {
-  return `${compactText(label, 100)} · ${formatConfidence(confidence)}`;
+export function formatScore(label: unknown, confidence: number): string {
+  return `${formatQuestion(label, "Score", 100)} · ${formatConfidence(confidence)}`;
 }
 
 function questionsOf(args: DisplayArgs): Questions {
   try {
-    const parsed = JSON.parse(args.questions_json ?? "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    const parsed: unknown = JSON.parse(args.questions_json ?? "{}");
+    validateQuestions(parsed);
+    return parsed;
   } catch { return {}; } // Incomplete streaming arguments are normal.
 }
 function formatAnswer(answer: Answer, question?: Questions[string]): string {

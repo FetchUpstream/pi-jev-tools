@@ -1,5 +1,5 @@
 // Adapted from Ten Levels of Jev; see LICENSE and THIRD_PARTY_NOTICES.md.
-import type { Answer, Questions, SystemOneResponse } from "./types.ts";
+import { isEntryContent, type Answer, type Questions, type SystemOneResponse } from "./types.ts";
 
 export class ContractError extends Error {
   constructor(message: string) {
@@ -35,18 +35,25 @@ export function validateResponse(response: unknown, questions: Questions): asser
       throw new ContractError(`Invalid distribution: ${id}`);
     }
     const keys = q.type === "choice" ? Object.keys(q.criteria) : q.criteria.map((_, i) => String(i));
-    const probs = answer.probabilities;
-    if (Object.keys(probs).length !== keys.length || !keys.every((k) => Object.hasOwn(probs, k) && isUnit(probs[k]))) {
+    const probs: Record<string, number> = {};
+    if (Object.keys(answer.probabilities).length !== keys.length) {
       throw new ContractError(`Distribution keys must match the declared criteria: ${id}`);
     }
-    const sum = keys.reduce((acc, k) => acc + (probs[k] as number), 0);
+    for (const key of keys) {
+      const value = answer.probabilities[key];
+      if (!Object.hasOwn(answer.probabilities, key) || !isUnit(value)) {
+        throw new ContractError(`Distribution keys must match the declared criteria: ${id}`);
+      }
+      Object.defineProperty(probs, key, { value, enumerable: true });
+    }
+    const sum = keys.reduce((acc, k) => acc + probs[k], 0);
     if (Math.abs(sum - 1) > 0.025) throw new ContractError(`Distribution does not sum to one: ${id} (${sum})`);
     if (q.type === "choice") {
       const choice = answer.choice;
       if (typeof choice !== "string" || !keys.includes(choice)) {
         throw new ContractError(`Undeclared choice returned: ${id}`);
       }
-      if (keys.some((k) => (probs[k] as number) > (probs[choice] as number))) {
+      if (keys.some((k) => probs[k] > probs[choice])) {
         throw new ContractError(`Choice must have maximum probability: ${id}`);
       }
     }
@@ -58,8 +65,8 @@ export function validateResponse(response: unknown, questions: Questions): asser
       // Canonical values come from the validated distribution and original rubric.
       const legend = answer.legend;
       if (!isObject(legend) || Object.keys(legend).length !== keys.length ||
-        !keys.every((k) => Object.hasOwn(legend, k) && typeof legend[k] === "string")) {
-        throw new ContractError(`Score legend must contain the declared level keys and string descriptions: ${id}`);
+        !keys.every((k) => Object.hasOwn(legend, k) && legend[k] !== null && isEntryContent(legend[k]))) {
+        throw new ContractError(`Score legend must contain the declared level keys and JSON entry descriptions: ${id}`);
       }
     }
   }

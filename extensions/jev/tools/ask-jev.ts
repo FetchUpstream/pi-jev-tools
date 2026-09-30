@@ -6,7 +6,7 @@ import { parseQuestions } from "../lib/questions.ts";
 
 export async function askJev(input: AssembleInput & { questions_json: string }, cwd: string, decide: Decide, signal?: AbortSignal) {
   const questions = parseQuestions(input.questions_json);
-  const assembled = await assembleState(input, cwd, (command, directory) => runSafeCommand(command, directory, decide, signal));
+  const assembled = await assembleState(input, cwd, (command, directory) => runSafeCommand(command, directory, signal));
   signal?.throwIfAborted();
   const result = await decide(assembled.state, questions);
   return { ...result, state_summary: assembled.summary };

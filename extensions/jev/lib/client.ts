@@ -2,22 +2,31 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { readConfig, PROVIDERS } from "./config.ts";
 import { compactResponse, ContractError, validateResponse } from "./response.ts";
-import { LIMITS, QuestionValidationError, validateRequest, type Questions, type State } from "./types.ts";
+import { QuestionValidationError, validateRequest, type Questions, type State } from "./types.ts";
+import { validateBudget } from "./budget.ts";
 
 export type Decision = ReturnType<typeof compactResponse>;
 export type Decide = (state: State, questions: Questions) => Promise<Decision>;
-const RETRY_STATUSES = new Set([429, 502, 503, 529]);
+export const isRetryableStatus = (status: number): boolean => status === 408 || status === 429 || (status >= 500 && status <= 599);
 
+export function parseRetryAfter(headers: Headers, now = Date.now()): number | undefined {
+  const rawMs = headers.get("retry-after-ms");
+  if (rawMs?.trim() && Number.isFinite(Number(rawMs)) && Number(rawMs) >= 0) return Number(rawMs);
+  const raw = headers.get("retry-after")?.trim();
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1000 : undefined;
+  if (!/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(raw)) return undefined;
+  const date = Date.parse(raw);
+  return Number.isFinite(date) ? Math.max(0, date - now) : undefined;
+}
 export function retryAfterMs(header: string | null): number {
-  if (!header?.trim()) return 0;
-  const value = header.trim();
-  if (/^\d+(?:\.\d+)?$/.test(value)) {
-    const ms = Number(value) * 1000;
-    return Number.isFinite(ms) ? ms : 0;
-  }
-  if (!/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(value)) return 0;
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
+  return parseRetryAfter(new Headers(header === null ? {} : { "retry-after": header })) ?? 0;
+}
+export function retryWaitMs(attempt: number, initial: number, headers?: Headers, random = Math.random()): number {
+  const server = headers ? parseRetryAfter(headers) : undefined;
+  if (server !== undefined && server <= 60_000) return server;
+  return Math.round(Math.min(5000, initial * 2 ** (attempt - 1)) * (1 - random * 0.25));
 }
 
 /** Credentials are resolved only on execution, not when Pi loads the extension. */
@@ -38,10 +47,7 @@ export class JevClient {
     catch { throw new QuestionValidationError("Request must be JSON-serializable (no cycles or BigInt)."); }
     const request: unknown = JSON.parse(body);
     validateRequest(request);
-    // Preserve the 64k shared budget, including large question blocks and JSON overhead.
-    if (Math.ceil(body.length / 4) > LIMITS.TOTAL_TOKEN_BUDGET) {
-      throw new QuestionValidationError("Jev request exceeds the 64k shared token estimate. Narrow the input or split the questions.");
-    }
+    validateBudget(request);
     const timeout = this.options.timeoutMs ?? 30_000;
     if (!Number.isInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647) throw new Error("Invalid request timeout.");
     const retryDelay = this.options.retryDelayMs ?? 500;
@@ -60,34 +66,47 @@ export class JevClient {
           });
         } catch {
           combined.throwIfAborted();
+          if (attempt < 3) {
+            await delay(retryWaitMs(attempt, retryDelay), undefined, { signal: combined });
+            continue;
+          }
           // Do not relay arbitrary transport messages that might include credentials.
           throw new Error(`Jev ${config.provider} request failed. Check network access.`);
         }
-        if (RETRY_STATUSES.has(response.status) && attempt < 3) {
-          const backoff = retryDelay * 2 ** (attempt - 1) * (1 + Math.random() * 0.2);
-          const wait = Math.min(8000, Math.max(backoff, retryAfterMs(response.headers.get("retry-after"))));
-          await response.body?.cancel();
+        if (isRetryableStatus(response.status) && attempt < 3) {
+          const wait = retryWaitMs(attempt, retryDelay, response.headers);
+          await response.body?.cancel().catch(() => {});
           await delay(wait, undefined, { signal: combined });
           continue;
         }
         if (!response.ok) {
-          await response.body?.cancel();
+          await response.body?.cancel().catch(() => {});
           let hint = "";
           if (response.status === 401) hint = ` Check ${PROVIDERS[config.provider].key}.`;
           else if (response.status === 402) hint = " Check account credits.";
           throw new Error(`Jev ${config.provider} HTTP ${response.status}.${hint}`);
         }
-        let parsed: unknown;
-        try { parsed = JSON.parse(await response.text()); }
+        let text: string;
+        try { text = await response.text(); }
         catch {
           combined.throwIfAborted();
-          throw new ContractError("Invalid response JSON.");
+          if (attempt < 3) {
+            await delay(retryWaitMs(attempt, retryDelay), undefined, { signal: combined });
+            continue;
+          }
+          throw new Error(`Jev ${config.provider} response delivery failed. Check network access.`);
         }
+        let parsed: unknown;
+        try { parsed = JSON.parse(text); }
+        catch { throw new ContractError("Invalid response JSON."); }
         combined.throwIfAborted();
         validateResponse(parsed, request.questions);
         return compactResponse(parsed, request.questions);
       }
       throw new Error("Jev retries exhausted.");
+    } catch (error) {
+      combined.throwIfAborted();
+      throw error;
     } finally { clearTimeout(timer); }
   }
 }

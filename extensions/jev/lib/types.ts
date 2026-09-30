@@ -6,42 +6,30 @@
  * `answer` per question, keyed by the IDs you chose.
  */
 
-/** The content being evaluated. A plain string, or structured data. */
-export type State = string | Record<string, unknown> | unknown[];
-
-/**
- * What to ask about the state. Can be a plain string, or a structured object
- * that puts the question in one field and the data it refers to in others.
- */
-export type Instructions = string | Record<string, unknown>;
-
-/** Optional clarification of what yes and no mean. */
-export interface NoulCriteria {
-  true?: string;
-  false?: string;
-}
-
-/** A map of option -> rubric description. Use null when an option needs no detail. Max 255 options. */
-export type ChoiceCriteria = Record<string, string | null>;
-
-/** An ordered array of level descriptions, low to high. 2-10 levels. */
-export type ScoreCriteria = string[];
-
+/** SDK JsonValue: scalar leaves may appear inside structured content. */
+export type JsonContent = string | number | boolean | null | JsonContent[] | { [key: string]: JsonContent };
+/** SDK EntryType: top-level numbers/booleans are not entries. */
+export type EntryContent = string | { [key: string]: JsonContent } | JsonContent[] | null;
+export type StructuredContent = Exclude<EntryContent, null>;
+export type State = StructuredContent;
+export type Instructions = EntryContent;
+export interface NoulCriteria { true?: EntryContent; false?: EntryContent }
+export type ChoiceCriteria = Record<string, EntryContent>;
+/** Length is enforced at the transport boundary. */
+export type ScoreCriteria = StructuredContent[];
 export interface NoulQuestion {
   type: "noul";
-  instructions: Instructions;
-  criteria?: NoulCriteria;
+  instructions?: Instructions;
+  criteria?: NoulCriteria | null;
 }
-
 export interface ChoiceQuestion {
   type: "choice";
-  instructions: Instructions;
+  instructions?: Instructions;
   criteria: ChoiceCriteria;
 }
-
 export interface ScoreQuestion {
   type: "score";
-  instructions: Instructions;
+  instructions?: Instructions;
   criteria: ScoreCriteria;
 }
 
@@ -71,7 +59,7 @@ export interface ScoreAnswer {
   /** Probability-weighted position along the levels. Can land between levels. */
   score: number;
   /** Each level number mapped back to its description. */
-  legend: Record<string, string>;
+  legend: Record<string, StructuredContent>;
   /** Each level mapped to its probability. Floats that sum to 1. */
   probabilities: Record<string, number>;
   confidence: number;
@@ -106,10 +94,11 @@ export interface SystemOneResponse {
 /** Client-side validation limits, mirrored from the published API. */
 export const LIMITS = {
   MAX_CHOICE_OPTIONS: 255,
-  MIN_SCORE_LEVELS: 2,
+  MIN_SCORE_LEVELS: 1, // Wire OpenAPI; convenience helper still recommends at least two.
   MAX_SCORE_LEVELS: 10,
   /** Approximate shared token budget for state + all questions. */
   TOTAL_TOKEN_BUDGET: 64_000,
+  PER_QUESTION_TOKEN_BUDGET: 32_000,
 } as const;
 
 export class QuestionValidationError extends Error {
@@ -123,11 +112,27 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" &&
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
+/** Reject non-JSON values, nonfinite numbers, sparse arrays and cycles before stringify. */
+export function isJsonContent(value: unknown, ancestors = new Set<unknown>()): value is JsonContent {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (!Array.isArray(value) && !isRecord(value)) return false;
+  if (ancestors.has(value)) return false;
+  ancestors.add(value);
+  const valid = Array.isArray(value)
+    ? Array.from({ length: value.length }, (_, i) => Object.hasOwn(value, i) && isJsonContent(value[i], ancestors)).every(Boolean)
+    : Object.values(value).every((entry) => isJsonContent(entry, ancestors));
+  ancestors.delete(value);
+  return valid;
+}
+export function isEntryContent(value: unknown): value is EntryContent {
+  return (value === null || typeof value === "string" || Array.isArray(value) || isRecord(value)) && isJsonContent(value);
+}
 /** Validate runtime input as well as TypeScript callers, before any transport. */
 export function validateRequest(request: unknown): asserts request is SystemOneRequest {
   if (!isRecord(request)) throw new QuestionValidationError("Expected a request object.");
-  if (typeof request.state !== "string" && !isRecord(request.state) && !Array.isArray(request.state)) {
-    throw new QuestionValidationError("State must be a string, object, or array.");
+  if (request.state === null || !isEntryContent(request.state)) {
+    throw new QuestionValidationError("State must be JSON-serializable string, object, or array (no cycles, undefined, or nonfinite numbers).");
   }
   if (request.model !== undefined && (typeof request.model !== "string" || !request.model.trim())) {
     throw new QuestionValidationError("Model must be a nonblank string.");
@@ -145,12 +150,12 @@ export function validateQuestions(questions: unknown): asserts questions is Ques
     if (q.type !== "noul" && q.type !== "choice" && q.type !== "score") {
       throw new QuestionValidationError(`Question "${id}" has a missing or unknown type.`);
     }
-    if (typeof q.instructions === "string" ? !q.instructions.trim() : !isRecord(q.instructions)) {
-      throw new QuestionValidationError(`Question "${id}" needs nonblank string or object instructions.`);
+    if (q.instructions !== undefined && !isEntryContent(q.instructions)) {
+      throw new QuestionValidationError(`Question "${id}" instructions must be JSON string, object, array, or null.`);
     }
-    if (q.type === "noul" && q.criteria !== undefined) {
+    if (q.type === "noul" && q.criteria !== undefined && q.criteria !== null) {
       if (!isRecord(q.criteria) || Object.entries(q.criteria).some(
-        ([key, value]) => !["true", "false"].includes(key) || (value !== undefined && typeof value !== "string")
+        ([key, value]) => !["true", "false"].includes(key) || !isEntryContent(value)
       )) {
         throw new QuestionValidationError(`Noul "${id}" criteria must map true/false to descriptions.`);
       }
@@ -168,8 +173,8 @@ export function validateQuestions(questions: unknown): asserts questions is Ques
           `Choice "${id}" has ${options.length} options; the maximum is ${LIMITS.MAX_CHOICE_OPTIONS}.`
         );
       }
-      if (Object.values(q.criteria).some((value) => value !== null && typeof value !== "string")) {
-        throw new QuestionValidationError(`Choice "${id}" descriptions must be strings or null.`);
+      if (Object.values(q.criteria).some((value) => !isEntryContent(value))) {
+        throw new QuestionValidationError(`Choice "${id}" descriptions must be JSON string, object, array, or null.`);
       }
     }
     if (q.type === "score") {
@@ -181,8 +186,8 @@ export function validateQuestions(questions: unknown): asserts questions is Ques
           `Score "${id}" must have between ${LIMITS.MIN_SCORE_LEVELS} and ${LIMITS.MAX_SCORE_LEVELS} levels; got ${q.criteria.length}.`
         );
       }
-      if (q.criteria.some((level) => typeof level !== "string" || !level.trim())) {
-        throw new QuestionValidationError(`Score "${id}" levels must be nonblank strings.`);
+      if (!isJsonContent(q.criteria) || q.criteria.some((level) => level === null || !isEntryContent(level))) {
+        throw new QuestionValidationError(`Score "${id}" levels must be JSON string, object, or array.`);
       }
     }
   }

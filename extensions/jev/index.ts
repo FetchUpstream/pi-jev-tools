@@ -16,7 +16,7 @@ export const TOOL_NAMES = ["ask_jev", "ask_jev_files", "pick_first_file", "ask_j
 const FILE_HINT = "Code reads the file; you get only a typed judgment. Write the question against `content` (file text) and `path`. Use read for code you need to edit/quote, grep for exact lookups.";
 const annotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: true };
 
-/** Each execution owns its client/usage, including the command gate and all batch calls. */
+/** Each execution owns its client/usage, including all independent batch calls. */
 async function run<T>(signal: AbortSignal | undefined, action: (decide: Decide) => Promise<T>) {
   let input = 0, output = 0, cost = 0;
   const usage = () => ({
@@ -41,7 +41,7 @@ async function run<T>(signal: AbortSignal | undefined, action: (decide: Decide) 
       details: payload, structuredContent: JSON.parse(text), usage: usage(),
     };
   } catch (error) {
-    // Keep usage already incurred by a gate or earlier batch calls, even on failure.
+    // Keep usage already incurred by earlier batch calls, even on failure.
     return {
       content: [{ type: "text" as const, text: error instanceof Error ? error.message : "Jev execution failed." }],
       details: undefined, isError: true, usage: usage(),
@@ -59,7 +59,7 @@ export default function jevTools(pi: ExtensionAPI) {
     name: "ask_jev", label: "Ask Jev", annotations,
     ...toolRenderers("ask_jev"),
     promptSnippet: "Delegate bounded typed judgments without loading files/output into your context.",
-    description: "Primary Jev judgment tool: one situation, one typed question block. state is a short note or JSON string; paths become files[\"path\"]; command becomes output {command,exit_code,stdout,stderr}. Up to 20 files/~60k state tokens; oversized situations include split guidance. Commands are limited to read-only git status/diff/log/show/ls-files, with no shell syntax, and must pass a Jev safety gate. For independent per-file judgments use ask_jev_files. Not a chat tool. " + QUESTION_DESCRIPTION,
+    description: "Primary Jev judgment tool: one situation, one typed question block. state is a short note or JSON string; paths become files[\"path\"]; command becomes output {command,exit_code,stdout,stderr}. Up to 20 files; state + longest question <=32k and state + all questions <=64k estimated tokens. Oversized situations include split guidance. Commands are restricted deterministically to read-only git status/diff/log/show/ls-files without shell syntax. For independent per-file judgments use ask_jev_files. Not a chat tool. " + QUESTION_DESCRIPTION,
     parameters: S.GeneralInput, outputSchema: S.GeneralOutput,
     execute: (_id, p, signal, _update, ctx) => run(signal, (decide) => askJev(p, ctx.cwd, decide, signal)),
   }));

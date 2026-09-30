@@ -20,7 +20,7 @@ const answers = { suspect: noul, category: choice, position: score };
 const forbidden = ["input_tokens", "output_tokens", "state_summary", "probabilities", "legend", "questions_json", '"answers":', '"usage":'];
 function clean(output: string) { for (const fragment of forbidden) expect(output).not.toContain(fragment); }
 
-test("noul displays confidence in the displayed answer, including ties", () => {
+test("noul displays answer probability, including ties, not TypeSafe confidence", () => {
   expect(formatNoul(0.72)).toBe("Yes · 72%");
   expect(formatNoul(0.24)).toBe("No · 76%");
   expect(formatNoul(0.5)).toBe("No · 50%");
@@ -137,4 +137,21 @@ test("Pi's actual ToolExecutionComponent uses registered hooks in compact and ex
     const error = row.render(140).map(stripAnsi).join("\n");
     expect(error).toContain("HTTP 401"); clean(error);
   }
+});
+
+test("structured questions and criteria render human labels without JSON dumps", () => {
+  const args = { questions_json: JSON.stringify({
+    n: { type: "noul", instructions: ["Worth reading?", { question: "Relevant?" }] },
+    c: { type: "choice", instructions: { question: "Which layer?" }, criteria: { a: { description: "Security boundary", examples: ["never dump"] }, other: null } },
+    s: { type: "score", instructions: null, criteria: [["Low"], { label: "High", data: { marker: "never dump" } }] },
+  }) };
+  const answers: Record<string, Answer> = {
+    n: { type: "noul", noul: 0.24 },
+    c: { type: "choice", choice: "a", confidence: 0.8, probabilities: { a: 1, other: 0 } },
+    s: { type: "score", score: 1, confidence: 0.9, probabilities: { "0": 0, "1": 1 }, legend: { "0": ["Low"], "1": { label: "High", data: { marker: "never dump" } } } },
+  };
+  const output = text(formatResult("ask_jev", args, { answers }));
+  for (const phrase of ["Worth reading? · Relevant?", "Which layer?", "Security boundary · 80%", "High · 90%", "No · 76%"]) expect(output).toContain(phrase);
+  expect(output).not.toContain("never dump");
+  expect(output).not.toContain('"description"');
 });

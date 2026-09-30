@@ -3,14 +3,15 @@
  * The agent's own state is the base. `paths` become `files`, keyed by path. `command` becomes `output`. One call, one situation. Over the budget, the error names the parts and a split that fits, so the agent can make two calls instead of one truncated one.
  */
 // Extracted from Ten Levels of Jev (MIT); see THIRD_PARTY_NOTICES.md.
-import { LIMITS } from "./types.ts";
+import { isEntryContent, LIMITS, type State } from "./types.ts";
 import { FileStateError, readFileState, expandPatterns, pruneFiles, type Skipped } from "./files.ts";
 import { parseState } from "./questions.ts";
 
 /** Roughly four characters per token, the same estimate the file reader uses. */
-export const tokensOf = (text: string) => Math.ceil(text.length / 4);
-/** Leave room for the questions inside Jev's shared budget. */
-export const STATE_TOKEN_BUDGET = LIMITS.TOTAL_TOKEN_BUDGET - 4000;
+export { tokensOf } from "./budget.ts";
+import { tokensOf } from "./budget.ts";
+/** Early state-only ceiling; full serialized state/questions are checked before transport. */
+export const STATE_TOKEN_BUDGET = LIMITS.PER_QUESTION_TOKEN_BUDGET;
 /** A single situation, not a corpus. Many files belong to ask_jev_files. */
 export const MAX_FILES_PER_CALL = 20;
 /** The agent's own note is for context, not for pasting content that code could fetch. */
@@ -32,7 +33,7 @@ export interface AssembleInput {
 }
 
 export interface Assembled {
-  state: Record<string, unknown>;
+  state: State;
   summary: {
     own_fields: string[];
     files: string[];
@@ -150,6 +151,7 @@ export async function assembleState(input: AssembleInput, cwd: string, run: RunC
   const state: Record<string, unknown> = { ...base };
   if (Object.keys(files).length) state.files = files;
   if (output) state.output = output;
+  if (!isEntryContent(state)) throw new AskStateError("Assembled state must contain only JSON content.");
 
   return {
     state,

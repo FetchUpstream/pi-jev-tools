@@ -19,5 +19,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
   const config = PROVIDERS[provider];
   const apiKey = env[config.key]?.trim();
   if (!apiKey) throw new Error(`${NOT_CONFIGURED} Selected provider ${provider} requires ${config.key}.`);
-  return { provider, apiKey, endpoint: config.endpoint, model: config.model };
+  const override = env.JEV_MODEL?.trim() || (provider === "typesafe" ? env.TYPESAFE_DEFAULT_MODEL?.trim() : env.OPENROUTER_MODEL?.trim());
+  let model = override || config.model;
+  if (provider === "openrouter" && model.startsWith("jev-")) model = `~typesafe/${model}`;
+  return { provider, apiKey, endpoint: config.endpoint, model };
 }

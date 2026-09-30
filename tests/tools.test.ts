@@ -45,7 +45,7 @@ test("score returns weighted position and nearest level description", async () =
 test("multiple-file partial failure retains useful results and successful/attempted counts", async () => {
   const dir = await make({ "a.ts": "a", "b.ts": "b", "binary.dat": Buffer.from([0]), "missing-empty.ts": "" });
   const decide: Decide = async (state, questions) => {
-    if (typeof state === "object" && "path" in state && state.path === "b.ts") throw new Error("provider HTTP 503");
+    if (state !== null && typeof state === "object" && "path" in state && state.path === "b.ts") throw new Error("provider HTTP 503");
     return fakeDecide(state, questions);
   };
   const r = await askFiles(["**/*"], Q_JSON, dir, decide);
@@ -86,7 +86,8 @@ test("pick returns declared path; none, weak, empty and reserved candidate handl
   await expect(pickFirstFile("Where?", [{ path: "none" }], fakeDecide)).rejects.toThrow("reserved");
 });
 test("question JSON rejects malformed, wrong types, unknown fields and invalid rubrics", () => {
-  for (const json of ["{bad", "[]", "{}", '{"q":{"type":"chat","instructions":"x"}}', '{"q":{"type":"noul","instructions":" "}}', '{"q":{"type":"score","instructions":"x","criteria":["only"]}}', '{"q":{"type":"choice","instructions":"x","criteria":{}}}', '{"q":{"type":"noul","instructions":"x","extra":1}}']) expect(() => parseQuestions(json)).toThrow();
+  for (const json of ["{bad", "[]", "{}", '{"q":{"type":"chat","instructions":"x"}}', '{"q":{"type":"noul","instructions":42}}', '{"q":{"type":"score","criteria":[]}}', '{"q":{"type":"choice","criteria":{}}}', '{"q":{"type":"noul","instructions":"x","extra":1}}']) expect(() => parseQuestions(json)).toThrow();
+  expect(parseQuestions('{"q":{"type":"score","criteria":["only"]}}')).toHaveProperty("q");
   expect(parseQuestions(Q_JSON)).toHaveProperty("q");
 });
 test("state parsing and assembly preserve field names, files and command output", async () => {
@@ -113,8 +114,8 @@ test("ask_jev returns only judgments and a small summary", async () => {
 test("ask_jev file cap, token overflow and split guidance are retained", async () => {
   const dir = await make(Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`f${i}.ts`, "x"])));
   await expect(askJev({ paths: ["*.ts"], questions_json: Q_JSON }, dir, fakeDecide)).rejects.toThrow("more than 20 files");
-  await writeFile(join(dir, "big1.txt"), "x".repeat(150_000));
-  await writeFile(join(dir, "big2.txt"), "x".repeat(150_000));
+  await writeFile(join(dir, "big1.txt"), "x".repeat(80_000));
+  await writeFile(join(dir, "big2.txt"), "x".repeat(80_000));
   await expect(askJev({ paths: ["big*.txt"], questions_json: Q_JSON }, dir, fakeDecide)).rejects.toThrow("Split into 2 calls");
   const groups = suggestSplit([{ name: "a", tokens: 30, kind: "file" }, { name: "b", tokens: 25, kind: "file" }, { name: "c", tokens: 20, kind: "file" }], 50);
   expect(groups.map((g) => g.map((p) => p.name))).toEqual([["a", "c"], ["b"]]);
@@ -141,7 +142,8 @@ test("rejected NUL binaries do not consume batch or general file slots", async (
   const batch = await askFiles(["*"], Q_JSON, dir, fakeDecide);
   expect(batch.calls).toBe(1);
   expect(batch.results[0].path).toBe("z.txt");
-  expect(batch.skipped.length).toBe(255);
+  expect(batch.skipped.length).toBe(100);
+  expect(batch.skipped_total).toBe(255);
   expect(batch.skipped.every((s) => s.reason.includes("binary"))).toBe(true);
   const general = await askJev({ paths: ["*"], questions_json: Q_JSON }, dir, fakeDecide);
   expect(general.state_summary.files).toEqual(["z.txt"]);

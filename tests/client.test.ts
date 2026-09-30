@@ -53,7 +53,7 @@ for (const provider of ["typesafe", "openrouter"] as const) {
   });
 }
 
-for (const status of [429, 502, 503, 529]) {
+for (const status of [408, 429, 500, 501, 502, 503, 504, 529, 599]) {
   test(`retry ${status}, at most three attempts, same body`, async () => {
     const bodies: unknown[] = [];
     const result = await client(async (_url, init) => {
@@ -68,7 +68,7 @@ for (const status of [429, 502, 503, 529]) {
     expect(count).toBe(3);
   });
 }
-for (const status of [400, 401, 402, 403, 500]) {
+for (const status of [400, 401, 402, 403, 404, 409, 422]) {
   test(`HTTP ${status} does not retry or relay response text`, async () => {
     let count = 0;
     await expect(client(async () => { count++; return new Response("private-provider-payload", { status }); }).systemOne("x", Q)).rejects.toThrow(`HTTP ${status}`);
@@ -96,7 +96,7 @@ test("wire budget and malformed requests are refused before transport", async ()
   const c = client(async () => { throw new Error("must not fetch"); });
   await expect(c.systemOne("x".repeat(256_000), Q)).rejects.toThrow("64k");
   await expect(c.systemOne("x", {})).rejects.toThrow("nonempty");
-  const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
+  const cyclic: { [key: string]: import("../extensions/jev/lib/types.ts").JsonContent } = {}; cyclic.self = cyclic;
   await expect(c.systemOne(cyclic, Q)).rejects.toThrow("JSON-serializable");
 });
 
@@ -180,4 +180,111 @@ describe("response contracts", () => {
     validateResponse(r, qs);
     expect(compactResponse(r, qs).answers.score).toHaveProperty("score", 1);
   });
+});
+
+test("SDK structured entries round-trip, including null and optional instructions", async () => {
+  const questions: Questions = {
+    n: { type: "noul", instructions: ["Is this relevant?", { exclusions: [false, 3, null] }], criteria: { true: { description: "Relevant", examples: [true] }, false: ["Unrelated"] } },
+    c: { type: "choice", instructions: { question: "Which?", data: [1, true] }, criteria: { a: { description: "Related" }, other: ["No match"] } },
+    s: { type: "score", instructions: null, criteria: [{ description: "Low", data: [1, false] }, ["High"]] },
+    optional: { type: "noul", criteria: null },
+  };
+  const result = await client(async () => Response.json(response(questions))).systemOne("x", questions);
+  expect(result.answers.s).toHaveProperty("legend", { "0": { description: "Low", data: [1, false] }, "1": ["High"] });
+});
+
+test("malformed nested content fails before network transport", async () => {
+  const { validateRequest } = await import("../extensions/jev/lib/types.ts");
+  const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
+  for (const bad of [undefined, NaN, Infinity, 1n, () => true, new Date(), cyclic]) {
+    for (const q of [
+      { type: "noul", instructions: { nested: bad } },
+      { type: "noul", criteria: { true: { nested: bad } } },
+      { type: "choice", criteria: { a: { nested: bad } } },
+      { type: "score", criteria: ["Low", { nested: bad }] },
+    ]) expect(() => validateRequest({ state: "x", questions: { q } })).toThrow();
+  }
+  for (const entry of [true, 42]) expect(() => validateRequest({ state: "x", questions: { q: { type: "noul", instructions: entry } } })).toThrow();
+  expect(() => validateRequest({ state: null, questions: Q })).toThrow();
+  expect(() => validateRequest({ state: "x", questions: { q: { type: "score", criteria: [null] } } })).toThrow();
+});
+
+test("structured legends validate both transport and Pi output shape", async () => {
+  const { Check } = await import("typebox/value");
+  const { GeneralOutput } = await import("../extensions/jev/lib/schemas.ts");
+  const qs: Questions = { score: { type: "score", criteria: [{ description: "Low" }, ["High"]] } };
+  const raw = response(qs);
+  validateResponse(raw, qs);
+  expect(Check(GeneralOutput, { ...compactResponse(raw, qs), state_summary: { own_fields: [], files: [], output: null, skipped: [], tokens: 0 } })).toBe(true);
+  for (const invalid of [null, 42, true, { nested: undefined }, [Infinity]]) {
+    const broken = { ...raw, answers: { score: { ...raw.answers.score, legend: { "0": invalid, "1": "High" } } } };
+    expect(() => validateResponse(broken, qs)).toThrow(ContractError);
+  }
+});
+
+test("aggregate and longest-question context budgets are independently enforced", async () => {
+  let calls = 0;
+  const c = client(async () => { calls++; return Response.json(response()); });
+  const many: Questions = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [String(i), { type: "noul", instructions: "x".repeat(28_000) }]));
+  await expect(c.systemOne("x", many)).rejects.toThrow("state + all questions");
+  await expect(c.systemOne("x".repeat(100_000), { q: { type: "noul", instructions: "x".repeat(30_000) } })).rejects.toThrow("state + longest question");
+  await expect(c.systemOne(String.fromCharCode(92).repeat(65_000), Q)).rejects.toThrow("state + longest question");
+  expect(calls).toBe(0);
+  await c.systemOne("x".repeat(90_000), { q: { type: "noul", instructions: "x".repeat(20_000) } });
+  expect(calls).toBe(1);
+});
+
+test("model override precedence preserves moving latest defaults", async () => {
+  expect(readConfig(env).model).toBe("jev-latest");
+  expect(readConfig({ OPENROUTER_API_KEY: "placeholder" }).model).toBe("~typesafe/jev-latest");
+  expect(readConfig({ ...env, TYPESAFE_DEFAULT_MODEL: "jev-1.13.0" }).model).toBe("jev-1.13.0");
+  expect(readConfig({ ...env, JEV_MODEL: "jev-preview", TYPESAFE_DEFAULT_MODEL: "jev-1.13.0" }).model).toBe("jev-preview");
+  expect(readConfig({ OPENROUTER_API_KEY: "placeholder", JEV_MODEL: "jev-1.13.0" }).model).toBe("~typesafe/jev-1.13.0");
+  await new JevClient({ env: { ...env, JEV_MODEL: "jev-1.13.0" }, fetch: transport(async (_url, init) => {
+    expect(JSON.parse(String(init.body)).model).toBe("jev-1.13.0"); return Response.json({ ...response(), model: "jev-1.13.0" });
+  }) }).systemOne("x", Q);
+});
+
+test("retry timing uses millisecond precedence, dates and bounded server delays", async () => {
+  const { parseRetryAfter, retryWaitMs, isRetryableStatus } = await import("../extensions/jev/lib/client.ts");
+  expect(parseRetryAfter(new Headers({ "retry-after-ms": "12.5", "retry-after": "9" }))).toBe(12.5);
+  expect(parseRetryAfter(new Headers({ "retry-after-ms": "bad", "retry-after": "0.75" }))).toBe(750);
+  expect(parseRetryAfter(new Headers({ "retry-after": "Thu, 01 Jan 1970 00:00:02 GMT" }), 1000)).toBe(1000);
+  for (const value of ["", "-1", "Infinity", "bad"]) expect(parseRetryAfter(new Headers({ "retry-after-ms": value }))).toBeUndefined();
+  expect(retryWaitMs(1, 500, new Headers({ "retry-after-ms": "0" }), 0)).toBe(0);
+  expect(retryWaitMs(1, 500, new Headers({ "retry-after": "61" }), 0)).toBe(500);
+  expect(retryWaitMs(3, 500, undefined, 0)).toBe(2000);
+  for (const status of [408, 429, 500, 504, 529, 599]) expect(isRetryableStatus(status)).toBe(true);
+  for (const status of [400, 401, 409, 422, 600]) expect(isRetryableStatus(status)).toBe(false);
+});
+
+test("connection and timeout failures retry, without leaking transport messages", async () => {
+  for (const error of [new TypeError("private"), new DOMException("private", "TimeoutError")]) {
+    let calls = 0;
+    await client(async () => { if (++calls < 3) throw error; return Response.json(response()); }).systemOne("x", Q);
+    expect(calls).toBe(3);
+  }
+  let bodies = 0;
+  await client(async () => ++bodies < 3 ? new Response(new ReadableStream({ start(controller) { controller.error(new Error("private")); } })) : Response.json(response())).systemOne("x", Q);
+  expect(bodies).toBe(3);
+});
+
+test("cancellation and total deadline interrupt Retry-After waits", async () => {
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    let calls = 0;
+    const c = new JevClient({ env, timeoutMs: 20, fetch: transport(async () => {
+      calls++;
+      if (cancel) setTimeout(() => controller.abort(new Error("cancelled")), 2);
+      return new Response("private", { status: 429, headers: { "retry-after": "60" } });
+    }) });
+    await expect(c.systemOne("x", Q, controller.signal)).rejects.toThrow(cancel ? "cancelled" : "timed out");
+    expect(calls).toBe(1);
+  }
+});
+
+test("distribution validation handles literal prototype-looking option names", () => {
+  const qs: Questions = { q: { type: "choice", criteria: JSON.parse('{"__proto__":"literal option","other":null}') } };
+  const raw: unknown = { model: "fixture", usage: { input_tokens: 1, output_tokens: 1 }, answers: { q: { type: "choice", choice: "__proto__", confidence: 1, probabilities: JSON.parse('{"__proto__":1,"other":0}') } } };
+  expect(() => validateResponse(raw, qs)).not.toThrow();
 });

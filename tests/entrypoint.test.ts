@@ -84,14 +84,12 @@ test("all six tools execute with mocked network and match their output schemas",
   }
   expect(fetchSpy).toHaveBeenCalledTimes(7); // 2 files; 1 each for the other 5 tools.
 });
-test("a refused command retains the successful gate's usage and never runs Git", async () => {
+test("a refused command never needs a Jev safety call", async () => {
   process.env.TYPESAFE_API_KEY = "unit-test-placeholder";
-  // Offline fixture's destructive noul is 0.8, above the retained 0.7 threshold.
-  const result = await invoke("ask_jev", { command: "git status", questions_json: Q_JSON });
+  const result = await invoke("ask_jev", { command: "git reset --hard", questions_json: Q_JSON });
   expect(result.isError).toBe(true);
   expect(JSON.stringify(result.content)).toContain("command refused");
-  expect(result.usage?.totalTokens).toBe(25);
-  expect(fetchSpy).toHaveBeenCalledTimes(1);
+  expect(fetchSpy).not.toHaveBeenCalled();
 });
 test("an entirely failed batch is an error but retains structured skipped reasons", async () => {
   process.env.TYPESAFE_API_KEY = "unit-test-placeholder";
