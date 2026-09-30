@@ -11,8 +11,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
   if (selected && selected !== "typesafe" && selected !== "openrouter") {
     throw new Error("JEV_BACKEND must be typesafe or openrouter. Offline mocks are test-only.");
   }
-  const provider: Provider | undefined = selected || (env.TYPESAFE_API_KEY?.trim() ? "typesafe"
-    : env.OPENROUTER_API_KEY?.trim() ? "openrouter" : undefined);
+  let provider: Provider | undefined;
+  if (selected === "typesafe" || selected === "openrouter") provider = selected;
+  else if (env.TYPESAFE_API_KEY?.trim()) provider = "typesafe";
+  else if (env.OPENROUTER_API_KEY?.trim()) provider = "openrouter";
   if (!provider) throw new Error(NOT_CONFIGURED);
   const config = PROVIDERS[provider];
   const apiKey = env[config.key]?.trim();

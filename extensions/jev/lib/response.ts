@@ -58,14 +58,16 @@ export function validateResponse(response: unknown, questions: Questions): asser
 }
 
 /** Only known typed values reach Pi, never provider extensions or raw exchanges. */
+function compactAnswer(a: Answer): Answer {
+  switch (a.type) {
+    case "noul": return { type: a.type, noul: a.noul };
+    case "choice": return { type: a.type, choice: a.choice, confidence: a.confidence, probabilities: a.probabilities };
+    case "score": return { type: a.type, score: a.score, confidence: a.confidence, probabilities: a.probabilities, legend: a.legend };
+  }
+}
+
 export function compactResponse(response: SystemOneResponse, questions: Questions) {
-  const answers: Record<string, Answer> = Object.fromEntries(Object.keys(questions).map((id) => {
-    const a = response.answers[id];
-    const value: Answer = a.type === "noul" ? { type: a.type, noul: a.noul }
-      : a.type === "choice" ? { type: a.type, choice: a.choice, confidence: a.confidence, probabilities: a.probabilities }
-      : { type: a.type, score: a.score, confidence: a.confidence, probabilities: a.probabilities, legend: a.legend };
-    return [id, value];
-  }));
+  const answers = Object.fromEntries(Object.keys(questions).map((id) => [id, compactAnswer(response.answers[id])]));
   const { input_tokens, output_tokens, cost } = response.usage;
   return {
     answers, model: response.model,
