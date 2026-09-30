@@ -105,7 +105,10 @@ export function overflowMessage(parts: Part[], budget: number): string {
  */
 export async function assembleState(input: AssembleInput, cwd: string, run: RunCommand): Promise<Assembled> {
   const own = input.state === undefined || (typeof input.state === "string" && !input.state.trim()) ? {} : parseState(input.state);
-  const base: Record<string, unknown> = typeof own === "string" ? { text: own } : Array.isArray(own) ? { items: own } : { ...own };
+  let base: Record<string, unknown>;
+  if (typeof own === "string") base = { text: own };
+  else if (Array.isArray(own)) base = { items: own };
+  else base = { ...own };
   const ownText = JSON.stringify(base);
   if (ownText.length > MAX_OWN_STATE_CHARS) {
     throw new AskStateError(`ask_jev: your state is ${fmtK(tokensOf(ownText))}; the limit for your own state is ${fmtK(tokensOf("x".repeat(MAX_OWN_STATE_CHARS)))}. Do not paste file contents or command output; pass paths or command instead and code fetches them.`);

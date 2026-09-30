@@ -72,8 +72,9 @@ export class JevClient {
         }
         if (!response.ok) {
           await response.body?.cancel();
-          const hint = response.status === 401 ? ` Check ${PROVIDERS[config.provider].key}.`
-            : response.status === 402 ? " Check account credits." : "";
+          let hint = "";
+          if (response.status === 401) hint = ` Check ${PROVIDERS[config.provider].key}.`;
+          else if (response.status === 402) hint = " Check account credits.";
           throw new Error(`Jev ${config.provider} HTTP ${response.status}.${hint}`);
         }
         let parsed: unknown;

@@ -17,23 +17,35 @@ const annotations = { readOnlyHint: true, destructiveHint: false, openWorldHint:
 
 /** Each execution owns its client/usage, including the command gate and all batch calls. */
 async function run<T>(signal: AbortSignal | undefined, action: (decide: Decide) => Promise<T>) {
-  signal?.throwIfAborted();
-  readConfig(); // One short configuration error, even for a large batch.
-  const client = new JevClient();
   let input = 0, output = 0, cost = 0;
-  const decide: Decide = async (state, questions) => {
-    const result = await client.systemOne(state, questions, signal);
-    input += result.usage.input_tokens; output += result.usage.output_tokens; cost += result.usage.cost ?? 0;
-    return result;
-  };
-  const payload = await action(decide);
-  const text = JSON.stringify(payload);
-  return {
-    content: [{ type: "text" as const, text }],
-    details: payload, structuredContent: JSON.parse(text),
-    usage: { input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output,
-      cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } },
-  };
+  const usage = () => ({
+    input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output,
+    cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+  });
+  try {
+    signal?.throwIfAborted();
+    readConfig(); // One short configuration error, even for a large batch.
+    const client = new JevClient();
+    const decide: Decide = async (state, questions) => {
+      const result = await client.systemOne(state, questions, signal);
+      input += result.usage.input_tokens;
+      output += result.usage.output_tokens;
+      cost += result.usage.cost ?? 0;
+      return result;
+    };
+    const payload = await action(decide);
+    const text = JSON.stringify(payload);
+    return {
+      content: [{ type: "text" as const, text }],
+      details: payload, structuredContent: JSON.parse(text), usage: usage(),
+    };
+  } catch (error) {
+    // Keep usage already incurred by a gate or earlier batch calls, even on failure.
+    return {
+      content: [{ type: "text" as const, text: error instanceof Error ? error.message : "Jev execution failed." }],
+      details: undefined, isError: true, usage: usage(),
+    };
+  }
 }
 
 export default function jevTools(pi: ExtensionAPI) {
@@ -50,7 +62,11 @@ export default function jevTools(pi: ExtensionAPI) {
     description: "Apply the same typed questions separately to files/directories/globs. Drops dependency/VCS/generated folders, empty/binary/lock/oversized files. At most 255 files, 16 requests in flight. Returns results, skipped reasons, successful calls and attempted calls; individual failures do not discard successes. Write questions against `content` and `path`. " + QUESTION_DESCRIPTION,
     parameters: Type.Object({ paths_or_globs: Type.Array(S.Text, { minItems: 1 }), questions_json: S.Text, recursive: Type.Optional(Type.Boolean({ description: "Recurse for directory inputs; default false. Globs control their own recursion." })) }, { additionalProperties: false }),
     outputSchema: S.FilesOutput,
-    execute: (_id, p, signal, _update, ctx) => run(signal, (decide) => askFiles(p.paths_or_globs, p.questions_json, ctx.cwd, decide, p.recursive, signal)),
+    execute: async (_id, p, signal, _update, ctx) => {
+      const result = await run(signal, (decide) => askFiles(p.paths_or_globs, p.questions_json, ctx.cwd, decide, p.recursive, signal));
+      if (result.details && result.details.attempts > 0 && result.details.calls === 0) return { ...result, isError: true };
+      return result;
+    },
   }));
   pi.registerTool(defineTool({
     name: "pick_first_file", label: "Pick first file", annotations,

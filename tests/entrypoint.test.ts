@@ -55,7 +55,11 @@ test("missing credentials reach configuration boundary without any network calls
     ["ask_jev_file_bool", { path: "src/a.ts", question: "Tokens?" }],
     ["ask_jev_files", { paths_or_globs: ["src/*.ts"], questions_json: Q_JSON }],
     ["ask_jev", { state: "tokens", questions_json: Q_JSON }],
-  ] as const) await expect(invoke(name, params)).rejects.toThrow(NOT_CONFIGURED);
+  ] as const) {
+    const result = await invoke(name, params);
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: NOT_CONFIGURED }]);
+  }
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 test("all six tools execute with mocked network and match their output schemas", async () => {
@@ -76,6 +80,24 @@ test("all six tools execute with mocked network and match their output schemas",
     expect(r.usage?.totalTokens).toBeGreaterThan(0);
   }
   expect(fetchSpy).toHaveBeenCalledTimes(7); // 2 files; 1 each for the other 5 tools.
+});
+test("a refused command retains the successful gate's usage and never runs Git", async () => {
+  process.env.TYPESAFE_API_KEY = "unit-test-placeholder";
+  // Offline fixture's destructive noul is 0.8, above the retained 0.7 threshold.
+  const result = await invoke("ask_jev", { command: "git status", questions_json: Q_JSON });
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result.content)).toContain("command refused");
+  expect(result.usage?.totalTokens).toBe(25);
+  expect(fetchSpy).toHaveBeenCalledTimes(1);
+});
+test("an entirely failed batch is an error but retains structured skipped reasons", async () => {
+  process.env.TYPESAFE_API_KEY = "unit-test-placeholder";
+  fetchSpy.mockImplementation((async (_url, _init) => new Response("not relayed", { status: 500 })) as typeof fetch);
+  const result = await invoke("ask_jev_files", { paths_or_globs: ["src/*.ts"], questions_json: Q_JSON });
+  expect(result.isError).toBe(true);
+  expect(Check(tools.find((t) => t.name === "ask_jev_files")!.outputSchema!, result.structuredContent)).toBe(true);
+  expect(JSON.stringify(result.content)).toContain("HTTP 500");
+  expect(JSON.stringify(result.content)).not.toContain("not relayed");
 });
 test("strict schemas reject extra fields, empty inputs and bad score scales", () => {
   const schema = (name: string) => tools.find((t) => t.name === name)!.parameters;
