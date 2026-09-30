@@ -274,6 +274,36 @@ Verified with Pi 0.99.1, Node 25.0.0 and Bun 1.3.7: **80 unit tests pass**,
 TypeScript checks pass, and both installed CLI-session checks pass. Live Jev
 verification was skipped because no supported provider credentials were present.
 
+### Real-primary behavioral verification
+
+Opt in from a development checkout with an authenticated primary model:
+
+```bash
+bun run verify:behavior -- '<provider>/<model>'
+```
+
+This consumes **primary-model** quota. It installs the package into an isolated
+Pi profile, disables context-file discovery (including `AGENTS.md`), and creates
+a 48-file synthetic repository. The primary model is real and unscripted; neither
+user prompt mentions Jev. Only Jev's transport is mocked with fixture-specific
+answers because no Jev credential was available. No mock backend is shipped in
+the installed extension; this verifies tool selection, not Jev judgment quality.
+
+Observed with `openai-codex/gpt-6.1-sol`:
+
+```text
+Semantic exploration: ls → find → ask_jev_files → read → read → grep
+                     48 candidates judged, only 2 selected implementations read
+Exact literal search: grep; zero Jev calls
+```
+
+The check asserts discovery precedes semantic filtering, no files are read before
+filtering, only selected implementations are read afterward, and the marked
+policy appears exactly once in each captured primary request. The exact-search
+control asserts zero Jev tool/transport calls. Temporary fixtures and profile
+are removed afterward. Model decisions can vary; this is guidance, not a routing
+guarantee across every model and task.
+
 ## Differences from the demo
 
 - One automatically discovered, typed Pi package entry point instead of three

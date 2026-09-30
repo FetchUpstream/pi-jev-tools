@@ -24,6 +24,7 @@
     "test": "bun test tests",
     "typecheck": "tsc --noEmit",
     "test:integration": "JEV_LIVE=1 bun run scripts/integration.ts",
-    "verify:pi": "bun run scripts/verify-pi.ts"
+    "verify:pi": "bun run scripts/verify-pi.ts",
+    "verify:behavior": "JEV_POLICY_LIVE=1 bun run scripts/verify-behavior.ts"
   }
 }
