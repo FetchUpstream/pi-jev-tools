@@ -35,7 +35,9 @@ const server = createServer(async (req, res) => {
     const payload = JSON.parse(body);
     const declared = payload.tools.map((t: { function: { name: string } }) => t.function.name);
     for (const name of expected) assert(declared.includes(name), `Not declared to model: ${name}`);
-    assert(JSON.stringify(payload.messages).includes("Use ask_jev for cheap bounded judgments"), "Delegation guideline missing");
+    const prompt = JSON.stringify(payload.messages);
+    assert.equal(prompt.split("## Jev usage policy").length - 1, 1, "Policy must be present exactly once in the effective prompt");
+    assert(prompt.includes("deterministic cheap operation > Jev bounded semantic judgment > primary-model semantic reasoning"), "Tool-selection hierarchy missing");
     const first = requests++ === 0;
     if (!first) {
       const results = payload.messages.filter((m: { role: string }) => m.role === "tool");

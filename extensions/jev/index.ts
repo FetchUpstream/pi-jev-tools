@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { JevClient, type Decide } from "./lib/client.ts";
 import { readConfig } from "./lib/config.ts";
 import { QUESTION_DESCRIPTION } from "./lib/questions.ts";
+import { JEV_POLICY_MARKER, JEV_USAGE_POLICY } from "./lib/policy.ts";
 import * as S from "./lib/schemas.ts";
 import { askJev } from "./tools/ask-jev.ts";
 import { askFileBool, askFileChoice, askFileScore } from "./tools/ask-jev-file.ts";
@@ -11,7 +12,6 @@ import { askFiles } from "./tools/ask-jev-files.ts";
 import { pickFirstFile } from "./tools/pick-first-file.ts";
 
 export const TOOL_NAMES = ["ask_jev", "ask_jev_files", "pick_first_file", "ask_jev_file_bool", "ask_jev_file_choice", "ask_jev_file_score"] as const;
-export const GUIDELINE = "Use ask_jev for cheap bounded judgments (yes/no, classification, relevance, risk scores, candidate selection) when full inputs would waste primary-model context. Pass paths/command instead of pasting content. Use read when you need the actual content to reason, edit or quote; use grep for exact lookups.";
 const FILE_HINT = "Code reads the file; you get only a typed judgment. Write the question against `content` (file text) and `path`. Use read for code you need to edit/quote, grep for exact lookups.";
 const annotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: true };
 
@@ -49,10 +49,14 @@ async function run<T>(signal: AbortSignal | undefined, action: (decide: Decide) 
 }
 
 export default function jevTools(pi: ExtensionAPI) {
+  pi.on("before_agent_start", (event) => {
+    if (event.systemPrompt.includes(JEV_POLICY_MARKER)) return;
+    return { systemPrompt: event.systemPrompt ? `${event.systemPrompt}\n\n${JEV_USAGE_POLICY}` : JEV_USAGE_POLICY };
+  });
+
   pi.registerTool(defineTool({
     name: "ask_jev", label: "Ask Jev", annotations,
     promptSnippet: "Delegate bounded typed judgments without loading files/output into your context.",
-    promptGuidelines: [GUIDELINE],
     description: "Primary Jev judgment tool: one situation, one typed question block. state is a short note or JSON string; paths become files[\"path\"]; command becomes output {command,exit_code,stdout,stderr}. Up to 20 files/~60k state tokens; oversized situations include split guidance. Commands are limited to read-only git status/diff/log/show/ls-files, with no shell syntax, and must pass a Jev safety gate. For independent per-file judgments use ask_jev_files. Not a chat tool. " + QUESTION_DESCRIPTION,
     parameters: S.GeneralInput, outputSchema: S.GeneralOutput,
     execute: (_id, p, signal, _update, ctx) => run(signal, (decide) => askJev(p, ctx.cwd, decide, signal)),

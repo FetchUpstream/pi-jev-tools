@@ -63,6 +63,41 @@ Without credentials, tools fail with:
 Jev is not configured. Set TYPESAFE_API_KEY or OPENROUTER_API_KEY.
 ```
 
+## Automatic Jev usage policy
+
+Installing the package activates both the tools and a permanent
+`## Jev usage policy` section. The extension's `before_agent_start` hook appends
+it to the effective system prompt on every agent run/turn, preserving existing
+instructions and skipping the append if the marker is already present. No
+separate `AGENTS.md` changes or explicit "use Jev" request are needed.
+
+Pi is taught to prefer:
+
+```text
+deterministic cheap operation > Jev bounded semantic judgment > primary-model semantic reasoning
+```
+
+For repository exploration:
+
+```text
+Need candidate files → deterministic search/find/glob
+Need semantic filtering → ask_jev_files
+Need one-file bounded judgment → ask_jev_file_bool / ask_jev_file_choice / ask_jev_file_score
+Need exact implementation details → read the selected file with the primary model
+```
+
+The policy encourages proactive yes/no judgments, classification, relevance,
+risk/confidence estimates, explicit-scale scoring, known-option selection,
+concept checks, candidate filtering, large-file-group triage and judgments of
+command output/repository state. It prefers `paths`/`command` over loading
+contents first and batching questions that share state.
+
+Exact questions still belong to grep, parsers, compilers, tests, type checkers
+and other deterministic tools. Jev is not for generation, editing or complex
+multi-step reasoning. This is model guidance, not forced routing: the primary
+model still decides which tool is appropriate. Jev credentials remain required
+for successful judgments.
+
 ## Tools
 
 | Tool | Contract | When Pi should use it |
@@ -153,7 +188,7 @@ Pi primary model → extension tool → Jev → small typed result → Pi primar
 ```
 
 `extensions/jev/index.ts` registers tools, strict TypeBox input/output schemas,
-and a short `ask_jev` prompt guideline. `tools/` implements Levels 8–10;
+and the automatic turn-hook usage policy. `tools/` implements Levels 8–10;
 `lib/` contains provider transport/validation, file handling, state assembly
 and command safety. Node reads inputs internally, avoiding large file/output
 blocks in the primary model's context and delegating bounded inference to Jev.
@@ -229,21 +264,21 @@ primary model to issue real tool calls through **Pi's normal Node CLI** from
 `/tmp`. It installs locally, then exercises the exact
 `git:github.com/FetchUpstream/pi-jev-tools` parser/clone/dependency-install path,
 using a temporary Git URL rewrite to the local committed repository. It proves
-all six tools are automatically registered/declared, the prompt guideline is
-present, all six reach the intended missing-credential error, and managed
+all six tools are automatically registered/declared, the marked policy appears
+exactly once in the effective prompt, all six reach the intended missing-credential error, and managed
 installs contain no duplicate Pi/TypeBox copies. No `-e`, upstream checkout,
 GitHub push or changes to your real Pi settings are involved. This verifies
 Git package shape, not remote publication/access.
 
-Verified with Pi 0.99.1, Node 25.0.0 and Bun 1.3.7: **75 unit tests pass**,
+Verified with Pi 0.99.1, Node 25.0.0 and Bun 1.3.7: **80 unit tests pass**,
 TypeScript checks pass, and both installed CLI-session checks pass. Live Jev
 verification was skipped because no supported provider credentials were present.
 
 ## Differences from the demo
 
 - One automatically discovered, typed Pi package entry point instead of three
-  manually loaded extensions; current Pi prompt guidelines replace wholesale
-  system-prompt rewriting and unverifiable price/latency claims.
+  manually loaded extensions; a marked `before_agent_start` usage policy
+  proactively teaches bounded delegation without unverifiable price/latency claims.
 - Both upstream providers and core precedence; no production mock backend.
 - No full-state stderr/session telemetry, UI hooks or assumed-price spend ledger.
 - File safeguards also apply to single-file tools; workspace symlink confinement,

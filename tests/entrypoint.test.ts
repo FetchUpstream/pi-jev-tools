@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
-import jevTools, { GUIDELINE, TOOL_NAMES } from "../extensions/jev/index.ts";
+import jevTools, { TOOL_NAMES } from "../extensions/jev/index.ts";
 import { NOT_CONFIGURED } from "../extensions/jev/lib/config.ts";
 import { fixture, Q_JSON, response } from "./support.ts";
 import { rm } from "node:fs/promises";
@@ -19,7 +19,10 @@ beforeEach(async () => {
     return Response.json(response(body.questions));
   }) as typeof fetch);
   tools = [];
-  jevTools({ registerTool: (tool: ToolDefinition) => { tools.push(tool); } } as ExtensionAPI);
+  jevTools({
+    registerTool: (tool: ToolDefinition) => { tools.push(tool); },
+    on: () => () => {},
+  } as unknown as ExtensionAPI);
   dir = await fixture();
 });
 afterEach(async () => {
@@ -41,7 +44,7 @@ test("one entrypoint registers exactly six directly active tools with strict con
     expect(tool.outputSchema).toBeDefined();
     expect(tool.exposure ?? "direct").toBe("direct");
   }
-  expect(tools[0].promptGuidelines).toEqual([GUIDELINE]);
+  expect(tools.every((tool) => !tool.promptGuidelines?.length)).toBe(true); // Policy lives in the turn hook, not repeated tool guidelines.
 });
 test("package manifest points only to the registering entrypoint and declares host peers", async () => {
   const manifest = await Bun.file(new URL("../package.json", import.meta.url)).json();
