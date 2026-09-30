@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+.pi/
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo

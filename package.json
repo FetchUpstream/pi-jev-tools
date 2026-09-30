@@ -1,0 +1,29 @@
+{
+  "name": "pi-jev-tools",
+  "version": "0.1.0",
+  "description": "Cheap, bounded, typed Jev judgments for Pi (Ten Levels of Jev, levels 8–10)",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/FetchUpstream/pi-jev-tools.git" },
+  "keywords": ["pi-package", "jev", "typesafe"],
+  "engines": { "node": ">=22.19.0" },
+  "pi": { "extensions": ["./extensions/jev/index.ts"] },
+  "files": ["extensions", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.99.1",
+    "@types/bun": "^1.3.11",
+    "@types/node": "^22.19.0",
+    "typebox": "^1.1.42",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "test": "bun test tests",
+    "typecheck": "tsc --noEmit",
+    "test:integration": "JEV_LIVE=1 bun run scripts/integration.ts",
+    "verify:pi": "bun run scripts/verify-pi.ts"
+  }
+}
