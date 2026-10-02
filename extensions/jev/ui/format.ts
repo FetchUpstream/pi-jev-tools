@@ -1,5 +1,5 @@
 import { validateQuestions, type Answer, type Questions } from "../lib/types.ts";
-import type { Skipped } from "../lib/files.ts";
+import { skipReason, type Skipped, type SkipCounts } from "../lib/files.ts";
 
 export type ToolName = "ask_jev" | "ask_jev_files" | "pick_first_file" | "ask_jev_file_bool" | "ask_jev_file_choice" | "ask_jev_file_score";
 export type Tone = "title" | "question" | "answer" | "muted" | "warning" | "error";
@@ -12,7 +12,8 @@ export interface DisplayArgs {
   levels?: readonly string[];
   paths?: readonly string[];
 }
-export interface DisplayDetails {
+interface DisplaySkips extends Partial<SkipCounts> { skipped?: Skipped[] }
+export interface DisplayDetails extends DisplaySkips {
   path?: string | null;
   noul?: number;
   choice?: string;
@@ -23,8 +24,7 @@ export interface DisplayDetails {
   results?: { path: string; answers: Record<string, Answer> }[];
   calls?: number;
   attempts?: number;
-  skipped?: Skipped[];
-  state_summary?: { skipped: Skipped[] };
+  state_summary?: DisplaySkips;
 }
 
 // User/provider text must never inject terminal controls into themed output.
@@ -83,17 +83,29 @@ function formatAnswer(answer: Answer, question?: Questions[string]): string {
   }
 }
 const line = (text: string, tone: Tone = "answer"): Line => ({ text, tone });
-const EXPECTED_SKIP = /^(?:binary(?: or lock file)?|empty|skipped directory|not a file):/;
-function omissionLines(skipped: Skipped[], expanded: boolean, failed = 0): Line[] {
-  const meaningful = skipped.filter((skip) => !EXPECTED_SKIP.test(skip.reason));
-  if (!meaningful.length && !failed) return [];
-  const reasons = [...new Set(meaningful.map((skip) => compactText(skip.reason, 140)))];
-  const omitted = Math.max(0, meaningful.length - failed);
+const EXPECTED_SKIP = /^(?:binary(?: or lock file)?|empty|skipped directory|not a file)(?::|$)/;
+function omissionLines(details: DisplaySkips, expanded: boolean, failed = 0): Line[] {
+  const meaningful = (details.skipped ?? []).filter((skip) => !EXPECTED_SKIP.test(skip.reason));
+  // Old session results have only examples; new results carry exact aggregate counts.
+  const counts = Object.entries(details.skipped_by_reason ?? {}).filter(([reason]) => !EXPECTED_SKIP.test(reason));
+  const meaningfulTotal = details.skipped_by_reason
+    ? counts.reduce((total, [, count]) => total + count, 0)
+    : meaningful.length;
+  if (!meaningfulTotal && !failed) return [];
+  const sampledReasons = new Set(meaningful.map((skip) => skipReason(skip.reason)));
+  const unsampled = counts.filter(([reason]) => !sampledReasons.has(reason));
+  const reasons = [...new Set([...meaningful.map((skip) => skip.reason), ...unsampled.map(([reason]) => reason)].map((reason) => compactText(reason, 140)))];
+  const omitted = Math.max(0, meaningfulTotal - failed);
   const omission = `${omitted} ${omitted === 1 ? "input" : "inputs"} omitted`;
   const summary = failed ? `${failed} failed${omitted ? `; ${omission}` : ""}` : omission;
   const rows = [line(`${summary}${reasons.length ? `: ${reasons[0]}` : ""}`, "warning")];
-  if (expanded) rows.push(...meaningful.map((skip) => line(`${formatPath(skip.path)} · ${compactText(skip.reason, 240)}`, "warning")));
-  else if (reasons.length > 1) rows.push(line(`${reasons.length - 1} more omission reasons (expand to inspect)`, "warning"));
+  if (expanded) {
+    rows.push(...meaningful.map((skip) => line(`${formatPath(skip.path)} · ${compactText(skip.reason, 240)}`, "warning")));
+    rows.push(...unsampled.map(([reason, count]) => line(`${count} · ${compactText(reason, 240)}`, "warning")));
+  } else if (reasons.length > 1) {
+    rows.push(line(`${reasons.length - 1} more omission reasons (expand to inspect)`, "warning"));
+  }
+  if (meaningfulTotal > meaningful.length) rows.push(line(`${meaningful.length} of ${meaningfulTotal} diagnostic examples retained`, "muted"));
   return rows;
 }
 
@@ -121,7 +133,7 @@ export function formatBatchResult(args: DisplayArgs, details: DisplayDetails, ex
   }
   if (!expanded && results.length > shown.length) rows.push(line(`${results.length - shown.length} more results (expand to inspect)`, "muted"));
   if (!expanded && questions.length > 4) rows.push(line(`${questions.length - 4} more questions (expand to inspect)`, "muted"));
-  rows.push(...omissionLines(details.skipped ?? [], expanded, Math.max(0, (details.attempts ?? results.length) - (details.calls ?? results.length))));
+  rows.push(...omissionLines(details, expanded, Math.max(0, (details.attempts ?? results.length) - (details.calls ?? results.length))));
   if (!results.length && !rows.some((row) => row.tone === "warning")) rows.push(line("No files available to judge", "warning"));
   return rows;
 }
@@ -141,7 +153,7 @@ export function formatResult(name: ToolName, args: DisplayArgs, details: Display
       rows.push(line(formatQuestion(questions[id]?.instructions, id, expanded ? 500 : 180), "question"), line(formatAnswer(answer, questions[id])));
     }
     if (!expanded && answers.length > 4) rows.push(line(`${answers.length - 4} more questions (expand to inspect)`, "muted"));
-    rows.push(...omissionLines(details.state_summary?.skipped ?? [], expanded));
+    rows.push(...omissionLines(details.state_summary ?? {}, expanded));
     return rows;
   }
   if (name === "pick_first_file") return [line(`${details.path ? formatPath(details.path) : "No candidate"} · ${formatConfidence(details.confidence ?? 0)}`)];

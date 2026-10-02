@@ -20,7 +20,8 @@ export const Answers = Type.Record(Type.String(), Answer);
 export const Skipped = Type.Array(Type.Object({ path: Type.String(), reason: Type.String() }, { additionalProperties: false }));
 export const Summary = Type.Object({
   own_fields: Type.Array(Type.String()), files: Type.Array(Type.String()),
-  output: Type.Union([Type.String(), Type.Null()]), skipped: Skipped, tokens: Count,
+  output: Type.Union([Type.String(), Type.Null()]), skipped: Skipped,
+  skipped_total: Count, skipped_by_reason: Type.Record(Type.String(), Count), tokens: Count,
 }, { additionalProperties: false });
 export const GeneralInput = Type.Object({
   questions_json: Text,

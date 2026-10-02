@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { rm, symlink } from "node:fs/promises";
+import { rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expandPatterns, MAX_FILE_CHARS, parallel, pruneFiles, readFileState, SKIP_DIRS } from "../extensions/jev/lib/files.ts";
+import { expandPatterns, MAX_DISCOVERED_ENTRIES, MAX_FILE_CHARS, parallel, pruneFiles, readFileState, SKIP_DIRS } from "../extensions/jev/lib/files.ts";
 import { fixture } from "./support.ts";
 const dirs: string[] = [];
 async function make(files?: Record<string, string | Buffer>) { const dir = await fixture(files); dirs.push(dir); return dir; }
@@ -100,4 +100,29 @@ test("existing metacharacter directories stay literal while user globs still exp
   const escaped = await pruneFiles(await expandPatterns(["src/[escape]"], dir, true), dir);
   expect(escaped.files).toEqual([]);
   expect(escaped.skipped.some((skip) => skip.reason.includes("outside"))).toBe(true);
+});
+
+test("directory and glob discovery count files once and still enforce the entry limit", async () => {
+  const count = 5100;
+  const dir = await make(Object.fromEntries(Array.from({ length: count }, (_, i) => [`f${i}.ts`, "code"])));
+  const globbed = await expandPatterns(["*.ts"], dir, true);
+  const directory = await expandPatterns(["."], dir, true);
+  expect(directory.paths).toEqual(globbed.paths);
+  expect(directory.discovered_entries).toBe(count + 1); // Files and the explicitly requested directory.
+  const repeated = await expandPatterns([".", ".", "./", "f0.ts"], dir, true);
+  expect(repeated.discovered_entries).toBe(directory.discovered_entries);
+  await parallel(Array.from({ length: MAX_DISCOVERED_ENTRIES - count + 1 }, (_, i) => i), 32,
+    (i) => writeFile(join(dir, `z${i}.ts`), "code"));
+  for (const pattern of [".", "*.ts"]) {
+    await expect(expandPatterns([pattern], dir, true)).rejects.toThrow(`Discovery exceeds ${MAX_DISCOVERED_ENTRIES} entries`);
+  }
+}, 20_000);
+
+test("excluded traversal entries count once even across overlapping patterns", async () => {
+  const dir = await make({ "a.ts": "code", "build/junk.ts": "generated" });
+  const once = await expandPatterns(["."], dir, true);
+  const result = await expandPatterns([".", "./", "a.ts"], dir, true);
+  expect(result.paths).toEqual(["a.ts"]);
+  expect(result.discovered_entries).toBe(once.discovered_entries);
+  expect(result.discovered_entries).toBeGreaterThan(result.paths.length + 1); // Also count excluded traversal entries.
 });

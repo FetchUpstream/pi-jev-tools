@@ -3,6 +3,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { assembleState, suggestSplit } from "../extensions/jev/lib/assemble.ts";
 import type { Decide } from "../extensions/jev/lib/client.ts";
+import { MAX_FILE_CHARS, MAX_SKIPPED_EXAMPLES } from "../extensions/jev/lib/files.ts";
 import { parseQuestions, parseState } from "../extensions/jev/lib/questions.ts";
 import { askFileBool, askFileChoice, askFileScore } from "../extensions/jev/tools/ask-jev-file.ts";
 import { askFiles } from "../extensions/jev/tools/ask-jev-files.ts";
@@ -147,4 +148,17 @@ test("rejected NUL binaries do not consume batch or general file slots", async (
   expect(batch.skipped.every((s) => s.reason.includes("binary"))).toBe(true);
   const general = await askJev({ paths: ["*"], questions_json: Q_JSON }, dir, fakeDecide);
   expect(general.state_summary.files).toEqual(["z.txt"]);
+});
+
+test("general summaries preserve aggregate omissions after skip samples fill", async () => {
+  const files = Object.fromEntries(Array.from({ length: MAX_SKIPPED_EXAMPLES }, (_, i) => [`a${i}.ts`, ""]));
+  files["y.ts"] = "code";
+  files["z.ts"] = "x".repeat(MAX_FILE_CHARS + 1);
+  const dir = await make(files);
+  const result = await askJev({ paths: ["."], questions_json: Q_JSON }, dir, fakeDecide);
+  expect(result.state_summary.files).toEqual(["y.ts"]);
+  expect(result.state_summary.skipped).toHaveLength(MAX_SKIPPED_EXAMPLES);
+  expect(result.state_summary.skipped_total).toBe(MAX_SKIPPED_EXAMPLES + 1);
+  expect(result.state_summary.skipped_by_reason).toEqual({ empty: MAX_SKIPPED_EXAMPLES, "too large": 1 });
+  await expect(askJev({ paths: [...Object.keys(files).filter((path) => path !== "y.ts")], questions_json: Q_JSON }, dir, fakeDecide)).rejects.toThrow("too large");
 });

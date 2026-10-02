@@ -67,37 +67,45 @@ export async function expandPatterns(patterns: string[], cwd: string, recursive:
   signal?.throwIfAborted();
   const out = new Set<string>();
   const metadata = { skipped: [] as Skipped[], skipped_total: 0, skipped_by_reason: {} as Record<string, number> };
-  let entries = 0;
-  const count = () => {
+  if (patterns.length > MAX_DISCOVERED_ENTRIES) throw new Error(`Discovery exceeds ${MAX_DISCOVERED_ENTRIES} input patterns; narrow the patterns.`);
+  const root = resolve(cwd);
+  const entries = new Set<string>();
+  const count = (path: string) => {
     signal?.throwIfAborted();
-    if (++entries > MAX_DISCOVERED_ENTRIES) throw new Error(`Discovery exceeds ${MAX_DISCOVERED_ENTRIES} entries; narrow the patterns.`);
+    entries.add(resolve(root, path));
+    if (entries.size > MAX_DISCOVERED_ENTRIES) throw new Error(`Discovery exceeds ${MAX_DISCOVERED_ENTRIES} entries; narrow the patterns.`);
   };
-  // Count excluded traversal entries as well as yielded entries: unusable trees are bounded too.
-  const exclude = (path: string) => { count(); return pathReason(resolve(cwd, path), resolve(cwd)) !== undefined; };
-  for (const raw of patterns) {
-    count();
-    const pattern = raw.trim();
+  // Glob may both check and yield an entry, or revisit it through overlapping patterns.
+  // Count normalized paths once, including excluded entries that are never yielded.
+  const exclude = (path: string) => {
+    const full = resolve(root, path);
+    count(full);
+    return pathReason(full, root) !== undefined;
+  };
+  for (const pattern of new Set(patterns.map((raw) => raw.trim()))) {
+    signal?.throwIfAborted();
     if (!pattern) continue;
     let info;
     try { info = await stat(resolve(cwd, pattern)); } catch { signal?.throwIfAborted(); }
     signal?.throwIfAborted();
     if (!info && /[*?[\]{}]/.test(pattern)) {
       let found = false;
-      for await (const path of glob(pattern, { cwd, exclude })) { count(); out.add(String(path)); found = true; }
+      for await (const path of glob(pattern, { cwd, exclude })) { count(String(path)); out.add(String(path)); found = true; }
       if (!found) retainSkip(metadata, { path: pattern, reason: `no files matched: ${pattern}` });
       continue;
     }
-    if (!info?.isDirectory() || exclude(pattern)) { out.add(pattern); continue; }
+    if (!info?.isDirectory() || exclude(pattern)) { count(pattern); out.add(pattern); continue; }
     let found = false;
     const directory = resolve(cwd, pattern);
     const excludeChild = (path: string) => exclude(relative(cwd, resolve(directory, path)));
     for await (const path of glob(recursive ? "**/*" : "*", { cwd: directory, exclude: excludeChild })) {
-      count(); out.add(relative(cwd, resolve(directory, String(path)))); found = true;
+      const child = relative(cwd, resolve(directory, String(path)));
+      count(child); out.add(child); found = true;
     }
     if (!found) retainSkip(metadata, { path: pattern, reason: `no files matched: ${pattern}` });
   }
   signal?.throwIfAborted();
-  return { paths: [...out].sort(), ...metadata, discovered_entries: entries };
+  return { paths: [...out].sort(), ...metadata, discovered_entries: entries.size };
 }
 async function checkBinary(path: string, actual: string, signal?: AbortSignal) {
   signal?.throwIfAborted();

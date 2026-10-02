@@ -91,6 +91,45 @@ test("partial/complete failures and meaningful omissions stay visible; expected 
   const mixed = text(formatResult("ask_jev_files", args, { ...details, skipped: [...details.skipped!, { path: "extra.ts", reason: "over the 255 file cap; narrow the pattern" }] }));
   expect(mixed).toContain("1 failed; 1 input omitted");
 });
+
+test("capped omission samples use exact counts and are labeled as samples", () => {
+  const reason = "over the 255 file cap; narrow the pattern";
+  const details: DisplayDetails = {
+    results: [{ path: "kept.ts", answers }], calls: 1, attempts: 1,
+    skipped: Array.from({ length: 100 }, (_, i) => ({ path: `extra${i}.ts`, reason })),
+    skipped_total: 245, skipped_by_reason: { [reason]: 245 },
+  };
+  for (const expanded of [false, true]) {
+    const output = text(formatResult("ask_jev_files", args, details, { expanded }));
+    expect(output).toContain("245 inputs omitted");
+    expect(output).toContain("100 of 245 diagnostic examples retained");
+    expect(output).not.toContain("100 inputs omitted");
+    clean(output);
+  }
+});
+
+test("aggregate reasons keep late omissions and failures visible after expected skips", () => {
+  const skipped = Array.from({ length: 100 }, (_, i) => ({ path: `empty${i}.ts`, reason: `empty: empty${i}.ts` }));
+  const failure = "Jev typesafe HTTP 401. Check TYPESAFE_API_KEY.";
+  for (const expanded of [false, true]) {
+    const omitted = text(formatResult("ask_jev", args, { answers, state_summary: {
+      skipped, skipped_total: 101, skipped_by_reason: { empty: 100, "too large": 1 },
+    } }, { expanded }));
+    expect(omitted).toContain("1 input omitted: too large");
+    expect(omitted).toContain("0 of 1 diagnostic examples retained");
+    expect(omitted).not.toContain("empty0.ts");
+    const failed = text(formatResult("ask_jev_files", args, {
+      results: [], calls: 0, attempts: 1, skipped, skipped_total: 101,
+      skipped_by_reason: { empty: 100, [failure]: 1 },
+    }, { expanded, isError: true }));
+    expect(failed).toContain(`1 failed: ${failure}`);
+    expect(failed).not.toContain("input omitted");
+    clean(omitted); clean(failed);
+  }
+  expect(text(formatResult("ask_jev", args, { answers, state_summary: {
+    skipped, skipped_total: 200, skipped_by_reason: { empty: 200 },
+  } }))).not.toContain("omitted");
+});
 test("long questions/paths are bounded and terminal control characters are removed", () => {
   expect(formatQuestion("long ".repeat(1000)).length).toBeLessThanOrEqual(180);
   const path = `${"long-directory/".repeat(100)}important-file.ts`;

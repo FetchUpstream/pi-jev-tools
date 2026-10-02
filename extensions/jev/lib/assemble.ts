@@ -4,7 +4,7 @@
  */
 // Extracted from Ten Levels of Jev (MIT); see THIRD_PARTY_NOTICES.md.
 import { isEntryContent, LIMITS, type State } from "./types.ts";
-import { FileStateError, readFileState, expandPatterns, pruneFiles, type Skipped } from "./files.ts";
+import { readFileState, expandPatterns, pruneFiles, retainSkip, type Skipped, type SkipCounts } from "./files.ts";
 import { parseState } from "./questions.ts";
 
 /** Roughly four characters per token, the same estimate the file reader uses. */
@@ -34,7 +34,7 @@ export interface AssembleInput {
 
 export interface Assembled {
   state: State;
-  summary: {
+  summary: SkipCounts & {
     own_fields: string[];
     files: string[];
     output: string | null;
@@ -117,22 +117,22 @@ export async function assembleState(input: AssembleInput, cwd: string, run: RunC
   const parts: Part[] = [];
   if (Object.keys(base).length) parts.push({ name: "your state", tokens: tokensOf(ownText), kind: "own" });
 
-  const skipped: Skipped[] = [];
+  let skips = { skipped: [] as Skipped[], skipped_total: 0, skipped_by_reason: {} as Record<string, number> };
   const files: Record<string, string> = Object.create(null);
   if (input.paths?.length) {
     const expanded = await expandPatterns(input.paths, cwd, true);
-    const pruned = await pruneFiles(expanded, cwd, MAX_FILES_PER_CALL + 1);
-    skipped.push(...pruned.skipped);
-    if (pruned.files.length > MAX_FILES_PER_CALL) {
+    const { files: paths, ...metadata } = await pruneFiles(expanded, cwd, MAX_FILES_PER_CALL + 1);
+    skips = metadata;
+    if (paths.length > MAX_FILES_PER_CALL) {
       throw new AskStateError(`ask_jev: paths expanded to more than ${MAX_FILES_PER_CALL} files. This tool judges one situation in one call. For many files use ask_jev_files, one call per file in parallel, or narrow the paths.`);
     }
-    for (const path of pruned.files) {
+    for (const path of paths) {
       try {
         const f = await readFileState(path, cwd);
         files[path] = f.content;
         parts.push({ name: path, tokens: tokensOf(f.content), kind: "file" });
       } catch (err) {
-        skipped.push({ path, reason: err instanceof FileStateError ? err.message : String((err as Error)?.message ?? err) });
+        retainSkip(skips, { path, reason: err instanceof Error ? err.message : "file unavailable" });
       }
     }
   }
@@ -143,7 +143,10 @@ export async function assembleState(input: AssembleInput, cwd: string, run: RunC
     parts.push({ name: `output of \`${output.command}\``, tokens: tokensOf(output.stdout + output.stderr), kind: "output" });
   }
 
-  if (!parts.length) throw new AskStateError(`ask_jev: nothing to judge. Pass state, paths, or command.${skipped.length ? ` Skipped: ${skipped.map((s) => s.reason).join("; ")}` : ""}`);
+  if (!parts.length) {
+    const reasons = Object.entries(skips.skipped_by_reason).map(([reason, count]) => `${count} ${reason}`).join("; ");
+    throw new AskStateError(`ask_jev: nothing to judge. Pass state, paths, or command.${skips.skipped_total ? ` Skipped ${skips.skipped_total} inputs: ${reasons}.` : ""}`);
+  }
 
   const total = parts.reduce((n, p) => n + p.tokens, 0);
   if (total > STATE_TOKEN_BUDGET) throw new AskStateError(overflowMessage(parts, STATE_TOKEN_BUDGET));
@@ -159,7 +162,7 @@ export async function assembleState(input: AssembleInput, cwd: string, run: RunC
       own_fields: Object.keys(base),
       files: Object.keys(files),
       output: output ? `${output.command}, exit ${output.exit_code}, ${fmtK(tokensOf(output.stdout + output.stderr))}` : null,
-      skipped,
+      ...skips,
       tokens: total,
     },
   };

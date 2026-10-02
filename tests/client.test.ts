@@ -215,7 +215,7 @@ test("structured legends validate both transport and Pi output shape", async () 
   const qs: Questions = { score: { type: "score", criteria: [{ description: "Low" }, ["High"]] } };
   const raw = response(qs);
   validateResponse(raw, qs);
-  expect(Check(GeneralOutput, { ...compactResponse(raw, qs), state_summary: { own_fields: [], files: [], output: null, skipped: [], tokens: 0 } })).toBe(true);
+  expect(Check(GeneralOutput, { ...compactResponse(raw, qs), state_summary: { own_fields: [], files: [], output: null, skipped: [], skipped_total: 0, skipped_by_reason: {}, tokens: 0 } })).toBe(true);
   for (const invalid of [null, 42, true, { nested: undefined }, [Infinity]]) {
     const broken = { ...raw, answers: { score: { ...raw.answers.score, legend: { "0": invalid, "1": "High" } } } };
     expect(() => validateResponse(broken, qs)).toThrow(ContractError);

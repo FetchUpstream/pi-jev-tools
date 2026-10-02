@@ -218,6 +218,8 @@ Globs use Node's `fs.promises.glob`; directories are nonrecursive for
 Files are deduplicated by resolved real path, with workspace-relative display paths.
 Existing literal filenames and directories (including `[id]`, `[slug]`, `{admin}` and `foo*`) remain literal. Actual user-supplied glob expressions still expand. Unmatched patterns
 are reported separately in `skipped`; binary detection happens before file-cap allocation.
+Discovery is capped at 10,000 normalized paths, including excluded traversal entries, and 10,000 input patterns. Overlapping patterns and repeated exclusion/yield callbacks do not consume additional entry slots for the same path.
+Skip examples are capped at 100; `skipped_total` and `skipped_by_reason` preserve exact counts in batch results and general `state_summary` values. The terminal uses those aggregates for omission totals and reasons, and labels incomplete diagnostic samples.
 A failed file does not discard the other results. If all attempted judgments
 fail, Pi receives an error result with the structured skipped reasons retained.
 `calls` counts successful file judgments (upstream semantics); `attempts` also
